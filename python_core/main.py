@@ -44,7 +44,7 @@ def calcular_riesgo(origen, tipo_ataque):
         probabilidad = 3
         impacto = 4 # Alto
     
-    # 4. LÓGICA DE CORRELACIÓN (LO QUE PIDIÓ TU JEFE)
+    # 4. LÓGICA DE CORRELACIÓN 
     # Si hay más de 1 activo diferente atacado en la ventana de tiempo
     activos_afectados = len(memoria_ataques)
     
