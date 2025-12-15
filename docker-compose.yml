@@ -1,0 +1,97 @@
+
+services:
+
+  # 1. SENSORES DE RED
+  zeek:
+    build: ./zeek_custom
+    container_name: siem_zeek
+    network_mode: "host"
+    privileged: true
+    environment:
+      - INTERFACE=any	
+    volumes:
+      - ./logs_zeek:/pcap
+    # Sin 'command', porque ya está en el Dockerfile
+    restart: always
+
+
+  snort:
+    build: ./snort_core
+    container_name: siem_snort
+    network_mode: "host"
+    privileged: true
+
+    volumes:
+      - ./logs_snort:/var/log/snort
+      - ./snort_config:/etc/snort
+
+    command: snort -q -i eth0 -A fast -c /etc/snort/snort.conf -l /var/log/snort -k none
+    restart: always
+
+
+  # 2. TRANSPORTE
+  redis:
+    image: redis:alpine
+    container_name: siem_redis
+    ports:
+      - "6379:6379"
+    restart: always
+
+
+  # 3. BASE DE DATOS
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.9
+    container_name: siem_elastic
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - elastic_data:/usr/share/elasticsearch/data
+    restart: always
+
+
+  # 4. CEREBRO INTELIGENTE (MATRIZ)
+  cerebro:
+    build: ./python_core
+    container_name: siem_cerebro
+    volumes:
+      - ./python_core:/app
+      - ./logs_zeek:/app/logs_zeek
+      - ./logs_snort:/app/logs_snort
+    environment:
+      - REDIS_HOST=redis
+      - ELASTIC_HOST=elasticsearch
+    depends_on:
+      - redis
+      - elasticsearch
+    restart: always
+
+
+  # 5. DASHBOARD
+  dashboard:
+    image: python:3.9-slim
+    container_name: siem_dashboard
+    working_dir: /app
+
+    volumes:
+      - ./mi_dashboard:/app
+
+    command: >
+      sh -c "pip install --upgrade pip &&
+             pip install streamlit redis pandas elasticsearch plotly &&
+             streamlit run app.py"
+
+    ports:
+      - "8501:8501"
+
+    depends_on:
+      - redis
+      - elasticsearch
+    restart: always
+
+
+volumes:
+  elastic_data:
+

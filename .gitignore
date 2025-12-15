@@ -1,0 +1,21 @@
+# Carpetas de logs generadas por contenedores
+logs_zeek/
+logs_snort/
+
+# Archivos de logs específicos (por si acaso no se cubrieran con las carpetas)
+*.log
+*.pcap
+
+# Archivos temporales o de cache de Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Archivos de cache de Docker Compose
+.docker/
+
+# Archivo de script temporal que creaste antes
+script_scapy_iec104.py
+atacante.py
+iec_104_simple.py
+
