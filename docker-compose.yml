@@ -25,7 +25,7 @@ services:
       - ./logs_snort:/var/log/snort
       - ./snort_config:/etc/snort
 
-    command: snort -q -i eth0 -A fast -c /etc/snort/snort.conf -l /var/log/snort -k none
+    command: snort -q -i wlp3s0 -A fast -c /etc/snort/snort.conf -l /var/log/snort -k none
     restart: always
 
 
