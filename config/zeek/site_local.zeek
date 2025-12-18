@@ -1,16 +1,18 @@
 # zeek_custom/site_local.zeek
-# Configuración mínima y moderna compatible con Zeek 5-8.x
-# Carga del script local estándar
+# Configuración base correcta para Zeek moderno
+
+# Inicialización base
 @load base/init-default.zeek
 
-# Carga de frameworks necesarios para la detección de protocolos
-@load base/frameworks/detection-protocols
-# Carga del protocolo TCP para que pueda aplicar las firmas DPD
-@load base/protocols/tcp
+# Frameworks FUNDAMENTALES para logs
+@load base/frameworks/logging
+@load base/frameworks/notice
+@load base/frameworks/files
 
-# Carga del plugin IEC 104 (instalado en /usr/local/zeek/share/zeek/site/packages/zeek-iec104/)
-# Zeek automáticamente detecta '__load__.zeek' dentro del plugin
-# Este script (__load__.zeek) a su vez carga main.zeek, que define el analizador y el log iec104.log
+# Cargar plugin IEC-104
 @load packages/zeek-iec104
 
-print "Site local.zeek cargado correctamente. Plugin IEC104 habilitado y DPD activado.";
+event zeek_init()
+{
+    print "Site local.zeek cargado correctamente. Plugin IEC104 habilitado.";
+}

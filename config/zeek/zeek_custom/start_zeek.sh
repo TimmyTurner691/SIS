@@ -1,36 +1,58 @@
 #!/bin/bash
-# zeek_custom/start_zeek.sh
-
-set -e  # Salir si algo falla
+set -e
 
 echo "Iniciando script de Zeek..."
 
-# --- Configuración (DEFINIR PRIMERO) ---
-LOG_DIR="/pcap"
-INTERFACE="${INTERFACE:-eth0}" # Permite sobrescribir con variable de entorno, sino usa eth0
+BASE_DIR="/pcap"
+LOGS_BASE="$BASE_DIR/logs"
 SITE_LOCAL_FILE="/opt/site_local.zeek"
+INTERFACE="${INTERFACE:-eth0}"
 
-# --- Validaciones ---
-if [ ! -d "$LOG_DIR" ]; then
-  echo "Error: El directorio de logs $LOG_DIR no existe en el contenedor."
-  exit 1
-fi
+# Crear carpeta base de logs si no existe
+mkdir -p "$LOGS_BASE"
 
+# Validaciones
 if [ ! -f "$SITE_LOCAL_FILE" ]; then
-  echo "Error: El archivo $SITE_LOCAL_FILE no se encontró."
+  echo "Error: No se encontró $SITE_LOCAL_FILE"
   exit 1
 fi
 
-# Establecer el directorio de logs
-export ZEEK_LOGDIR="$LOG_DIR"
-echo "ZEEK_LOGDIR configurado a: $ZEEK_LOGDIR"
-echo "Iniciando Zeek en la interfaz $INTERFACE..."
-echo "Usando site_local: $SITE_LOCAL_FILE"
+# -------------------------------
+# MODO PCAP
+# -------------------------------
+if [ -n "$1" ]; then
+  PCAP_FILE="$1"
+  PCAP_PATH="$BASE_DIR/$PCAP_FILE"
 
-# --- Iniciar Zeek (EJECUTAR AL FINAL) ---
-exec zeek -i "$INTERFACE" -C "$SITE_LOCAL_FILE"
+  if [ ! -f "$PCAP_PATH" ]; then
+    echo "Error: No se encontró el PCAP $PCAP_PATH"
+    exit 1
+  fi
 
-# Nota: Se removió el argumento '--logdir' del comando zeek.
-# Se manejará mediante ZEEK_LOGDIR.
-# También se removió 'local' y 'zeek-iec104' como argumentos directos,
-# ya que se cargarán desde site_local.zeek.
+  # Nombre limpio del PCAP (sin extensión)
+  PCAP_NAME="$(basename "$PCAP_FILE" .pcap)"
+
+  # Carpeta final de logs
+  FINAL_LOGDIR="$LOGS_BASE/$PCAP_NAME"
+  mkdir -p "$FINAL_LOGDIR"
+
+  echo "Analizando PCAP: $PCAP_FILE"
+  echo "Logs se guardarán en: $FINAL_LOGDIR"
+
+  exec zeek -r "$PCAP_PATH" \
+    -C "$SITE_LOCAL_FILE" \
+    Log::default_logdir="$FINAL_LOGDIR"
+fi
+
+# -------------------------------
+# MODO LIVE
+# -------------------------------
+LIVE_LOGDIR="$LOGS_BASE/live"
+mkdir -p "$LIVE_LOGDIR"
+
+echo "Iniciando captura en interfaz $INTERFACE"
+echo "Logs se guardarán en: $LIVE_LOGDIR"
+
+exec zeek -i "$INTERFACE" \
+  -C "$SITE_LOCAL_FILE" \
+  Log::default_logdir="$LIVE_LOGDIR"

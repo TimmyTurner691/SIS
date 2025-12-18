@@ -1,0 +1,26 @@
+filebeat.inputs:
+# 1. Input para ZEEK
+- type: log
+  enabled: true
+  paths:
+    - /logs/zeek/current/*.log   # Ojo: Zeek rota logs, 'current' suele ser el activo
+    - /logs/zeek/*.log
+  fields:
+    source_type: "zeek"
+  fields_under_root: true
+
+# 2. Input para SNORT
+- type: log
+  enabled: true
+  paths:
+    - /logs/snort/alert
+  fields:
+    source_type: "snort"
+  fields_under_root: true
+
+# --- SALIDA HACIA REDIS (Según tu Diagrama) ---
+output.redis:
+  hosts: ["redis:6379"]
+  key: "sis_queue"       # Esta es la 'Key' que Python debe leer
+  datatype: "list"
+  bulk_max_size: 1024    # Envía en bloques para no saturar

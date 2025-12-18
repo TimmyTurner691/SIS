@@ -1,10 +1,11 @@
-
+version: '3.8'
 
 services:
 
-  # 1. SENSORES DE RED
+  # =========================================
+  # 1. SENSORES DE RED (Captura)
+  # =========================================
   zeek:
-    # Ajustamos la ruta de construcción porque moviste la carpeta zeek_custom
     build: ./config/zeek/zeek_custom
     container_name: siem_zeek
     network_mode: "host"
@@ -12,24 +13,42 @@ services:
     environment:
       - INTERFACE=any
     volumes:
-      # Ajustamos la ruta de los logs
       - ./logs/logs_zeek:/pcap
     restart: always
 
   snort:
     build: ./snort_core
     container_name: siem_snort
-    network_mode: "host"
+    network_mode: "host"    # Esto es excelente, permite ver la tarjeta real
     privileged: true
     volumes:
-      # Ajustamos ruta de logs y de configuración
       - ./logs/logs_snort:/var/log/snort
-      - ./config/snort/snort_config:/etc/snort
-    # Comando ajustado (nota: verifica que tu interfaz sea wlp2s0, si no, cámbiala aquí)
-    command: snort -q -i wlp2s0 -A fast -c /etc/snort/snort.conf -l /var/log/snort -k none
+      # 1. Montamos SOLO el archivo de configuración (Archivo -> Archivo)
+      - ./config/snort/snort_config/snort.conf:/etc/snort/snort.conf
+      # 2. Montamos la carpeta de reglas para que lea local.rules
+      - ./config/snort/rules:/etc/snort/rules
+    command: snort -q -i enp2s0 -c /etc/snort/snort.conf -l /var/log/snort -A fast -k none
     restart: always
 
-  # 2. TRANSPORTE
+  # =========================================
+  # 2. TRANSPORTE (Filebeat -> Redis)
+  # =========================================
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:7.17.9
+    container_name: siem_filebeat
+    user: root
+    restart: always
+    volumes:
+      # Configuración (Debe apuntar a output.redis)
+      - ./config/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      # Acceso a Logs de Zeek (Lectura)
+      - ./logs/logs_zeek/logs/live:/logs/zeek:ro
+      # Acceso a Logs de Snort (Lectura)
+      - ./logs/logs_snort:/logs/snort:ro
+    depends_on:
+      - redis
+    command: filebeat -e -strict.perms=false
+
   redis:
     image: redis:alpine
     container_name: siem_redis
@@ -37,7 +56,9 @@ services:
       - "6379:6379"
     restart: always
 
-  # 3. BASE DE DATOS
+  # =========================================
+  # 3. BASE DE DATOS HISTÓRICA
+  # =========================================
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:7.17.9
     container_name: siem_elastic
@@ -50,15 +71,19 @@ services:
       - elastic_data:/usr/share/elasticsearch/data
     restart: always
 
-  # 4. CEREBRO INTELIGENTE (MATRIZ)
+  # =========================================
+  # 4. CEREBRO INTELIGENTE (Python Core)
+  # =========================================
   cerebro:
     build: ./python_core
     container_name: siem_cerebro
     volumes:
       - ./python_core:/app
-      # Ajustamos las rutas para que el cerebro encuentre los logs
+      # Para que pueda leer logs crudos si es necesario
       - ./logs/logs_zeek:/app/logs_zeek
       - ./logs/logs_snort:/app/logs_snort
+      # IMPORTANTE: Montamos scripts para que funcionen tus demos de ataque
+      - ./scripts:/scripts
     environment:
       - REDIS_HOST=redis
       - ELASTIC_HOST=elasticsearch
@@ -67,13 +92,24 @@ services:
       - elasticsearch
     restart: always
 
-  # 5. DASHBOARD
+  # =========================================
+  # 5. DASHBOARD (Streamlit)
+  # =========================================
   dashboard:
     image: python:3.9-slim
     container_name: siem_dashboard
     working_dir: /app
     volumes:
+      # 1. Tu código fuente
       - ./mi_dashboard:/app
+      
+      # 2. Logs de SNORT (Lectura directa)
+      - ./logs/logs_snort:/var/log/snort:ro
+      
+      # 3. Logs de ZEEK (Mapeamos la carpeta 'live' a la raíz interna)
+      # Esto hará que '/var/log/zeek/conn.log' exista dentro del contenedor
+      - ./logs/logs_zeek/logs/live:/var/log/zeek:ro
+      
     command: >
       sh -c "pip install --upgrade pip &&
              pip install streamlit redis pandas elasticsearch plotly &&
