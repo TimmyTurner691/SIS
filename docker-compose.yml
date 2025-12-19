@@ -13,19 +13,18 @@ services:
     environment:
       - INTERFACE=any
     volumes:
+      # Zeek escribe aquí. Asumimos que dentro genera la carpeta /logs/live
       - ./logs/logs_zeek:/pcap
     restart: always
 
   snort:
     build: ./snort_core
     container_name: siem_snort
-    network_mode: "host"    # Esto es excelente, permite ver la tarjeta real
+    network_mode: "host"
     privileged: true
     volumes:
       - ./logs/logs_snort:/var/log/snort
-      # 1. Montamos SOLO el archivo de configuración (Archivo -> Archivo)
       - ./config/snort/snort_config/snort.conf:/etc/snort/snort.conf
-      # 2. Montamos la carpeta de reglas para que lea local.rules
       - ./config/snort/rules:/etc/snort/rules
     command: snort -q -i wlp2s0 -c /etc/snort/snort.conf -l /var/log/snort -A fast -k none
     restart: always
@@ -39,11 +38,9 @@ services:
     user: root
     restart: always
     volumes:
-      # Configuración (Debe apuntar a output.redis)
       - ./config/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
-      # Acceso a Logs de Zeek (Lectura)
+      # Filebeat también necesita apuntar a la carpeta LIVE
       - ./logs/logs_zeek/logs/live:/logs/zeek:ro
-      # Acceso a Logs de Snort (Lectura)
       - ./logs/logs_snort:/logs/snort:ro
     depends_on:
       - redis
@@ -79,10 +76,12 @@ services:
     container_name: siem_cerebro
     volumes:
       - ./python_core:/app
-      # Para que pueda leer logs crudos si es necesario
-      - ./logs/logs_zeek:/app/logs_zeek
-      - ./logs/logs_snort:/app/logs_snort
-      # IMPORTANTE: Montamos scripts para que funcionen tus demos de ataque
+      
+      # --- CORRECCIÓN CLAVE ---
+      # Apuntamos directo a donde Zeek guarda los archivos vivos
+      - ./logs/logs_zeek/logs/live:/var/log/zeek
+      
+      - ./logs/logs_snort:/var/log/snort
       - ./scripts:/scripts
     environment:
       - REDIS_HOST=redis
@@ -93,21 +92,18 @@ services:
     restart: always
 
   # =========================================
-  # 5. DASHBOARD (Streamlit)
+  # 5. DASHBOARD
   # =========================================
   dashboard:
     image: python:3.9-slim
     container_name: siem_dashboard
     working_dir: /app
     volumes:
-      # 1. Tu código fuente
       - ./mi_dashboard:/app
-      
-      # 2. Logs de SNORT (Lectura directa)
       - ./logs/logs_snort:/var/log/snort:ro
       
-      # 3. Logs de ZEEK (Mapeamos la carpeta 'live' a la raíz interna)
-      # Esto hará que '/var/log/zeek/conn.log' exista dentro del contenedor
+      # --- CORRECCIÓN CLAVE TAMBIÉN AQUÍ ---
+      # El dashboard también necesita ver los logs vivos para mostrarlos
       - ./logs/logs_zeek/logs/live:/var/log/zeek:ro
       
     command: >

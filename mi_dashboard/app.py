@@ -1,214 +1,213 @@
 import streamlit as st
 import pandas as pd
+from elasticsearch import Elasticsearch
 import plotly.express as px
-import redis
-import json
-import time
-import os
-import re
-from datetime import datetime
+import plotly.graph_objects as go
+import datetime
 
-# ==========================================
-# 1. CONFIGURACIÓN DE PÁGINA (Minimalista)
-# ==========================================
+# --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="SIS Monitor", 
-    layout="wide", 
+    page_title="SIS - SIEM Dashboard",
     page_icon="🛡️",
-    initial_sidebar_state="collapsed"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Estilos CSS Limpios
+# --- ESTILOS CSS ---
 st.markdown("""
 <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    
-    .big-metric { font-size: 50px !important; font-weight: bold; }
-    .stProgress > div > div > div > div { background-color: #00b6ff; }
+    .metric-card {border: 1px solid #e6e6e6; padding: 10px; border-radius: 5px;}
+    .stMetric { background-color: #0E1117; padding: 10px; border-radius: 5px; border: 1px solid #333; }
 </style>
 """, unsafe_allow_html=True)
 
-# Rutas y Constantes
-LOGO_PATH = 'sis_logo.png' 
-SNORT_LOG_FILE = '/var/log/snort/alert'
-ZEEK_CONN_LOG = '/var/log/zeek/conn.log'
-ZEEK_IEC104_LOG = '/var/log/zeek/iec104.log'
-COLOR_CELESTE = '#00b6ff'
-
-# ==========================================
-# 2. FUNCIONES DE DATOS (Backend)
-# ==========================================
-
-# --- REDIS (Cerebro) ---
+# --- CONEXIÓN ---
 try:
-    r = redis.Redis(host='redis', port=6379, db=0, decode_responses=True)
-except Exception as e:
-    r = None
+    es = Elasticsearch("http://elasticsearch:9200")
+except:
+    st.error("🚨 Error de conexión con Elasticsearch")
+    es = None
 
-def obtener_estado_matriz():
-    if not r: return None
-    try:
-        datos = r.get('sis:matriz_estado')
-        if datos: return json.loads(datos)
-    except: pass
-    return None
+# --- FUNCIONES DE CARGA ---
+def get_data(minutes=60, start=None, end=None, limit=5000):
+    if not es: return pd.DataFrame()
+    
+    # LÓGICA DE TIEMPO CORREGIDA PARA HISTORIAL
+    if start and end:
+        # Convertimos la fecha 'end' para que incluya hasta el último segundo del día
+        start_dt = datetime.datetime.combine(start, datetime.time.min)
+        end_dt = datetime.datetime.combine(end, datetime.time.max)
+        time_range = {"gte": start_dt.isoformat(), "lte": end_dt.isoformat()}
+    else:
+        time_range = {"gte": f"now-{minutes}m/m"}
 
-# --- PARSEO DE LOGS ---
-def clean_snort_timestamp(raw_ts):
+    query = {
+        "query": {"range": {"@timestamp": time_range}},
+        "sort": [{"@timestamp": "desc"}],
+        "size": limit
+    }
+    
     try:
-        clean_str = raw_ts.split('.')[0] 
-        dt_obj = datetime.strptime(clean_str, "%m/%d-%H:%M:%S")
-        dt_obj = dt_obj.replace(year=datetime.now().year)
-        return dt_obj.strftime("%Y-%m-%d %H:%M:%S")
-    except: return raw_ts
-
-def parse_snort_logs(filepath):
-    data = []
-    pattern = re.compile(r'^(\S+)\s+.*?\[\*\*\]\s+(.*?)\s+\[\*\*\]\s+.*?\{(.*?)\}\s+(\S+)\s+->\s+(\S+)')
-    if not os.path.exists(filepath): return pd.DataFrame()
-    try:
-        with open(filepath, 'r') as f:
-            lines = f.readlines()[-100:] 
-            for line in reversed(lines):
-                match = pattern.search(line)
-                if match:
-                    raw_ts, msg, proto, src, dst = match.groups()
-                    data.append({
-                        "timestamp": clean_snort_timestamp(raw_ts),
-                        "alerta": msg,
-                        "protocolo": proto,
-                        "src_ip": src.split(':')[0],
-                        "dst_ip": dst.split(':')[0]
-                    })
-    except: pass
-    return pd.DataFrame(data)
-
-def parse_zeek_logs(filepath):
-    if not os.path.exists(filepath): return pd.DataFrame()
-    try:
-        df = pd.read_csv(filepath, sep='\t', comment='#', header=None, on_bad_lines='skip')
-        if not df.empty and 0 in df.columns:
-            df[0] = pd.to_datetime(df[0], unit='s').dt.strftime('%Y-%m-%d %H:%M:%S')
+        res = es.search(index="sis-logs-v1", body=query)
+        hits = [h['_source'] for h in res['hits']['hits']]
+        df = pd.DataFrame(hits)
+        if not df.empty:
+            df['@timestamp'] = pd.to_datetime(df['@timestamp'])
+            
+            # --- NORMALIZACIÓN DE SCORE DE IA (TRUCO VISUAL) ---
+            if 'ai_score' not in df.columns: df['ai_score'] = 0.0
+            df['ai_score'] = df['ai_score'].fillna(0.0)
+            
+            # Convertimos el score negativo matemático en un "Score de Riesgo" positivo (0 a 100)
+            # Asumimos que valores muy negativos son malos. Invertimos y escalamos.
+            # Multiplicamos por 1000 y tomamos valor absoluto para efecto visual
+            df['risk_score'] = df['ai_score'].apply(lambda x: abs(x) * 1000 if x < 0 else 0)
+            
+            # Target visual
+            df['Target'] = df['dst_ip'].astype(str) + ":" + df['protocol'].astype(str)
         return df
-    except: return pd.DataFrame()
+    except Exception as e:
+        return pd.DataFrame()
 
-# ==========================================
-# 3. CARGA DE DATOS
-# ==========================================
-estado = obtener_estado_matriz()
-if not estado:
-    estado = {"color": "VERDE", "riesgo_total": 0, "mensaje": "Esperando análisis...", "nivel": "BAJO"}
+# --- SIDEBAR ---
+st.sidebar.title("🎛️ Centro de Comando")
+modo = st.sidebar.radio("Vista", ["En Vivo (Live)", "Históricos"])
 
-df_snort = parse_snort_logs(SNORT_LOG_FILE)
-df_conn = parse_zeek_logs(ZEEK_CONN_LOG)
-count_conn = len(df_conn) if not df_conn.empty else 0
-df_iec104 = parse_zeek_logs(ZEEK_IEC104_LOG)
-count_iec104 = len(df_iec104) if not df_iec104.empty else 0
+df = pd.DataFrame()
 
-# Colores Dinámicos
-color_recibido = estado.get('color', 'VERDE')
-riesgo_num = estado.get('riesgo_total', 0)
+if modo == "En Vivo (Live)":
+    rango = st.sidebar.slider("Ventana (minutos)", 5, 1440, 60)
+    if st.sidebar.button("🔄 Actualizar"):
+        st.cache_data.clear()
+    df = get_data(minutes=rango)
+    st.title(f"📡 Monitoreo en Tiempo Real (Últimos {rango} min)")
 
-if color_recibido == "ROJO_CRITICO":
-    texto_nivel = "CRÍTICO"
-    color_css = "#ff2b2b"
-elif color_recibido == "AMARILLO":
-    texto_nivel = "ALERTA MEDIA"
-    color_css = "#ffcc00"
 else:
-    texto_nivel = "BAJO / SEGURO"
-    color_css = "#00cc44"
+    col1, col2 = st.sidebar.columns(2)
+    fecha_inicio = col1.date_input("Inicio", datetime.date.today())
+    fecha_fin = col2.date_input("Fin", datetime.date.today())
+    if st.sidebar.button("🔍 Buscar Historial"):
+        df = get_data(start=fecha_inicio, end=fecha_fin, limit=10000)
+    st.title("📂 Análisis Forense (Histórico)")
 
-# ==========================================
-# 4. DASHBOARD (Interfaz Limpia)
-# ==========================================
+# --- LÓGICA PRINCIPAL ---
 
-# --- CABECERA SIMPLE ---
-col_logo, col_titulo = st.columns([1, 10])
-
-with col_logo:
-    if os.path.exists(LOGO_PATH):
-        st.image(LOGO_PATH, width=90)
-    else:
-        st.write("🛡️")
-
-with col_titulo:
-    # Alineación vertical con CSS inline simple
-    st.markdown("<h1 style='margin-top: 5px; margin-bottom: 0px;'>SIS: Segnet Intelligence System</h1>", unsafe_allow_html=True)
-    st.markdown("<div style='color: gray; font-size: 14px;'>Monitor de Seguridad Industrial OT</div>", unsafe_allow_html=True)
-
-st.markdown("---")
-
-# --- SECCIÓN 1: MATRIZ DE RIESGO ---
-st.subheader("Matriz de Riesgo")
-c1, c2, c3 = st.columns([1, 1, 2])
-
-with c1:
-    st.markdown("### Nivel de Amenaza")
-    st.markdown(f"<div style='color: {color_css}; font-size: 45px; font-weight: bold;'>{texto_nivel}</div>", unsafe_allow_html=True)
-
-with c2:
-    st.metric(label="Puntaje de Riesgo", value=f"{riesgo_num} / 25")
-    progreso = min(riesgo_num * 4, 100)
-    st.progress(progreso / 100)
-
-with c3:
-    st.info(f"📋 **Diagnóstico:** {estado.get('mensaje', '...')}")
-    ts_alerta = estado.get('timestamp', '---')
-    st.caption(f"Última detección: {ts_alerta} | Origen: {estado.get('origen', '---')}")
-
-st.markdown("---")
-
-# --- SECCIÓN 2: KPIs ---
-k1, k2, k3 = st.columns(3)
-with k1: st.metric("🚨 Alertas IDS (Snort)", len(df_snort))
-with k2: st.metric("🌐 Conexiones Totales", count_conn)
-with k3: st.metric("⚡ Paquetes IEC-104", count_iec104, delta="Industrial")
-
-st.write("")
-
-# --- SECCIÓN 3: GRÁFICOS ---
-if not df_snort.empty:
-    g1, g2 = st.columns(2)
-    with g1:
-        st.subheader("🔥 Top IPs Atacantes")
-        if 'src_ip' in df_snort.columns:
-            top_src = df_snort['src_ip'].value_counts().head(5).reset_index()
-            top_src.columns = ['IP Origen', 'Alertas']
-            fig = px.bar(top_src, x='IP Origen', y='Alertas', text='Alertas', color_discrete_sequence=[COLOR_CELESTE])
-            fig.update_traces(textposition='outside')
-            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig, use_container_width=True)
-    with g2:
-        st.subheader("📡 Protocolos Detectados")
-        if 'protocolo' in df_snort.columns:
-            fig2 = px.pie(df_snort, names='protocolo', hole=0.4, color_discrete_sequence=px.colors.sequential.Teal_r)
-            fig2.update_layout(paper_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig2, use_container_width=True)
+if df.empty:
+    st.info("⏳ Esperando datos... (Si estás en Historial, asegúrate de que hubo tráfico en esa fecha)")
 else:
-    st.info("ℹ️ Esperando tráfico de Snort...")
+    tab_ia, tab_snort, tab_zeek, tab_iec, tab_raw = st.tabs([
+        "🧠 IA & Riesgo", "🛡️ Alertas IDS", "🌐 Tráfico Red", "🏭 Industrial", "📝 Logs"
+    ])
 
-# --- SECCIÓN 4: TABLAS DE DATOS ---
-st.markdown("### 📜 Registros Detallados")
-tab1, tab2, tab3 = st.tabs(["🔴 Alertas Snort", "⚡ Tráfico IEC-104", "🔵 Conexiones Zeek"])
+    # ==========================================
+    # PESTAÑA 1: IA (MEJORADA)
+    # ==========================================
+    with tab_ia:
+        st.markdown("### 🧬 Detección de Amenazas (Normalizado)")
+        
+        # Usamos el nuevo 'risk_score' positivo para los KPIs
+        avg_risk = df['risk_score'].mean()
+        max_risk = df['risk_score'].max()
+        anomalies = df[df['ai_anomaly'] == True].shape[0] if 'ai_anomaly' in df.columns else 0
+        
+        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+        
+        # Explicación de los KPIs:
+        # Nivel de Amenaza: Un número basado en qué tan "raro" es el tráfico.
+        kpi1.metric("Nivel de Amenaza Global", f"{avg_risk:.1f}/100")
+        kpi2.metric("Pico Máximo Detectado", f"{max_risk:.1f}/100")
+        kpi3.metric("Paquetes Anómalos", anomalies, help="Cantidad de eventos marcados como 'raros' por la IA")
+        kpi4.metric("Total Eventos", len(df))
 
-with tab1:
-    st.dataframe(df_snort, use_container_width=True)
+        st.markdown("---")
 
-with tab2:
-    if not df_iec104.empty: st.dataframe(df_iec104, use_container_width=True)
-    else: st.write("Sin tráfico SCADA.")
+        col_gauge, col_matrix = st.columns([1, 2])
+        
+        with col_gauge:
+            # Gauge normalizado de 0 a 100
+            max_val_gauge = min(max_risk, 100) # Tope en 100 visualmente
+            
+            fig_gauge = go.Figure(go.Indicator(
+                mode = "gauge+number",
+                value = max_val_gauge,
+                domain = {'x': [0, 1], 'y': [0, 1]},
+                title = {'text': "Probabilidad de Ataque (%)"},
+                gauge = {
+                    'axis': {'range': [None, 100]},
+                    'bar': {'color': "darkred"},
+                    'steps': [
+                        {'range': [0, 30], 'color': "lightgreen"},
+                        {'range': [30, 70], 'color': "yellow"},
+                        {'range': [70, 100], 'color': "red"}],
+                }
+            ))
+            st.plotly_chart(fig_gauge, use_container_width=True)
 
-with tab3:
-    if not df_conn.empty and df_conn.shape[1] > 6:
-        cols_mostrar = [0, 2, 4, 6, 8]
-        df_zeek_show = df_conn.iloc[:, cols_mostrar].copy()
-        df_zeek_show.columns = ['Timestamp', 'IP Origen', 'IP Destino', 'Proto', 'Servicio']
-        st.dataframe(df_zeek_show, use_container_width=True)
-    else:
-        st.write("Sin datos de conexión.")
+        with col_matrix:
+            if 'src_ip' in df.columns:
+                fig_matrix = px.density_heatmap(
+                    df, 
+                    x="Target", 
+                    y="src_ip", 
+                    z="risk_score", # Usamos el score positivo
+                    histfunc="max", 
+                    color_continuous_scale="Magma", # Color fuego
+                    title="Mapa de Calor de Riesgo"
+                )
+                st.plotly_chart(fig_matrix, use_container_width=True)
 
-# --- ACTUALIZACIÓN SILENCIOSA (Sin reloj visual) ---
-time.sleep(2)
-st.rerun()
+        # Scatter Plot corregido y positivo
+        df['visual_size'] = df['risk_score'] + 5 # Tamaño mínimo base
+        
+        fig_scatter = px.scatter(
+            df, 
+            x="@timestamp", 
+            y="risk_score", # Eje Y positivo
+            color="risk_score",
+            size="visual_size",
+            size_max=50,
+            color_continuous_scale="OrRd", # Blanco a Rojo
+            title="Línea de Tiempo de Intensidad de Amenaza"
+        )
+        st.plotly_chart(fig_scatter, use_container_width=True)
+
+    # ==========================================
+    # PESTAÑA 2: SNORT (BLINDADO)
+    # ==========================================
+    with tab_snort:
+        df_snort = df[df['source'] == 'snort']
+        if df_snort.empty:
+            st.success("✅ Sin alertas de Snort.")
+        else:
+            cols = ['@timestamp', 'priority', 'classification', 'message', 'src_ip', 'dst_ip']
+            safe_cols = [c for c in cols if c in df_snort.columns]
+            st.dataframe(df_snort[safe_cols], use_container_width=True)
+
+    # ==========================================
+    # PESTAÑA 3: ZEEK
+    # ==========================================
+    with tab_zeek:
+        df_zeek = df[(df['source'] == 'zeek') & (df['sub_source'] != 'zeek_iec104')]
+        col1, col2 = st.columns(2)
+        with col1:
+            if 'protocol' in df_zeek.columns:
+                st.plotly_chart(px.bar(df_zeek['protocol'].value_counts(), title="Protocolos"), use_container_width=True)
+        with col2:
+             if 'src_ip' in df_zeek.columns:
+                st.plotly_chart(px.bar(df_zeek['src_ip'].value_counts().head(10), orientation='h', title="Top IPs Origen"), use_container_width=True)
+        st.dataframe(df_zeek.head(100), use_container_width=True)
+
+    # ==========================================
+    # PESTAÑA 4: INDUSTRIAL
+    # ==========================================
+    with tab_iec:
+        mask_iec = (df['sub_source'] == 'zeek_iec104') | (df.get('protocol') == 'iec104')
+        df_iec = df[mask_iec]
+        if df_iec.empty:
+            st.info("Sin tráfico SCADA detectado.")
+        else:
+            st.metric("Comandos IEC-104", len(df_iec))
+            st.dataframe(df_iec, use_container_width=True)
+
+    with tab_raw:
+        st.dataframe(df.head(50))
