@@ -105,6 +105,7 @@ def procesar_evento(datos):
             print(f"🔥 {alerta['color']} - Riesgo {alerta['riesgo_total']}: {alerta['mensaje']}", flush=True)
             
             # 1. Enviar Alerta al Dashboard (Redis Pub/Sub)
+            r.set('sis:matriz_estado', json.dumps(alerta))
             r.publish('alertas_siem', json.dumps(alerta))
             
             # 2. Guardar en Elastic (Persistencia)
