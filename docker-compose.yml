@@ -1,4 +1,3 @@
-version: '3.8'
 
 services:
 
@@ -13,7 +12,6 @@ services:
     environment:
       - INTERFACE=any
     volumes:
-      # Zeek escribe aquí. Asumimos que dentro genera la carpeta /logs/live
       - ./logs/logs_zeek:/pcap
     restart: always
 
@@ -39,7 +37,6 @@ services:
     restart: always
     volumes:
       - ./config/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
-      # Filebeat también necesita apuntar a la carpeta LIVE
       - ./logs/logs_zeek/logs/live:/logs/zeek:ro
       - ./logs/logs_snort:/logs/snort:ro
     depends_on:
@@ -76,13 +73,13 @@ services:
     container_name: siem_cerebro
     volumes:
       - ./python_core:/app
-      
-      # --- CORRECCIÓN CLAVE ---
-      # Apuntamos directo a donde Zeek guarda los archivos vivos
+      # Logs
       - ./logs/logs_zeek/logs/live:/var/log/zeek
-      
       - ./logs/logs_snort:/var/log/snort
       - ./scripts:/scripts
+      # Archivos compartidos (Para que el backend también pueda actualizar inventario)
+      - ./ot_inventory.json:/ot_inventory.json
+      - ./cve_report.csv:/cve_report.csv
     environment:
       - REDIS_HOST=redis
       - ELASTIC_HOST=elasticsearch
@@ -99,16 +96,23 @@ services:
     container_name: siem_dashboard
     working_dir: /app
     volumes:
+      # Código fuente del dashboard
       - ./mi_dashboard:/app
+      # Logs para visualización
       - ./logs/logs_snort:/var/log/snort:ro
-      
-      # --- CORRECCIÓN CLAVE TAMBIÉN AQUÍ ---
-      # El dashboard también necesita ver los logs vivos para mostrarlos
       - ./logs/logs_zeek/logs/live:/var/log/zeek:ro
       
+      # --- NUEVOS VOLÚMENES PARA EL SCANNER ---
+      # 1. Montamos la carpeta del backend para poder llamar al script
+      - ./python_core:/python_core
+      # 2. Montamos los archivos JSON y CSV en la raíz del contenedor
+      - ./ot_inventory.json:/ot_inventory.json
+      - ./cve_report.csv:/cve_report.csv
+      
+    # Agregamos 'requests' a la instalación para que el scanner funcione
     command: >
       sh -c "pip install --upgrade pip &&
-             pip install streamlit redis pandas elasticsearch plotly &&
+             pip install streamlit redis pandas elasticsearch plotly requests &&
              streamlit run app.py"
     ports:
       - "8501:8501"

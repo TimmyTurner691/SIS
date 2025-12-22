@@ -4,6 +4,9 @@ from elasticsearch import Elasticsearch
 import plotly.express as px
 import plotly.graph_objects as go
 import datetime
+import os
+import json
+import time
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
@@ -20,6 +23,17 @@ st.markdown("""
     .stMetric { background-color: #0E1117; padding: 10px; border-radius: 5px; border: 1px solid #333; }
 </style>
 """, unsafe_allow_html=True)
+
+# --- CONFIGURACIÓN DE RUTAS (CRÍTICO PARA CONECTAR CARPETAS) ---
+# BASE_DIR será la carpeta raíz del proyecto (SIS/) asumiendo que app.py está en SIS/mi_dashboard/
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Rutas a los archivos compartidos en la raíz
+INVENTORY_FILE = os.path.join(BASE_DIR, "ot_inventory.json")
+REPORT_FILE = os.path.join(BASE_DIR, "cve_report.csv")
+
+# Ruta al script del scanner en la otra carpeta
+SCANNER_SCRIPT = os.path.join(BASE_DIR, "python_core", "vuln_scanner.py")
 
 # --- CONEXIÓN ---
 try:
@@ -98,17 +112,27 @@ else:
 
 # --- LÓGICA PRINCIPAL ---
 
-if df.empty:
-    st.info("⏳ Esperando datos... (Si estás en Historial, asegúrate de que hubo tráfico en esa fecha)")
-else:
-    tab_ia, tab_snort, tab_zeek, tab_iec, tab_raw = st.tabs([
-        "🧠 IA & Riesgo", "🛡️ Alertas IDS", "🌐 Tráfico Red", "🏭 Industrial (SCADA)", "📝 Logs"
-    ])
+if df.empty and modo == "En Vivo (Live)" and not st.sidebar.button("🔄 Actualizar"):
+    # Pequeño hack para mostrar la interfaz vacía pero funcional en la pestaña de CVEs
+    # aunque no haya logs.
+    pass 
 
-    # ==========================================
-    # PESTAÑA 1: IA (MEJORADA)
-    # ==========================================
-    with tab_ia:
+tab_ia, tab_snort, tab_zeek, tab_iec, tab_vuln, tab_raw = st.tabs([
+    "🧠 IA & Riesgo", 
+    "🛡️ Alertas IDS", 
+    "🌐 Tráfico Red", 
+    "🏭 Industrial (SCADA)", 
+    "⚠️ CVEs & Inventario", 
+    "📝 Logs"
+])
+
+# ==========================================
+# PESTAÑA 1: IA (MEJORADA)
+# ==========================================
+with tab_ia:
+    if df.empty:
+        st.info("Esperando datos de tráfico para IA...")
+    else:
         st.markdown("### 🧬 Detección de Amenazas (Normalizado)")
 
         avg_risk = df['risk_score'].mean()
@@ -170,10 +194,13 @@ else:
         )
         st.plotly_chart(fig_scatter, use_container_width=True)
 
-    # ==========================================
-    # PESTAÑA 2: SNORT
-    # ==========================================
-    with tab_snort:
+# ==========================================
+# PESTAÑA 2: SNORT
+# ==========================================
+with tab_snort:
+    if df.empty:
+        st.info("Sin datos.")
+    else:
         df_snort = df[df['source'] == 'snort']
         if df_snort.empty:
             st.success("✅ Sin alertas de Snort.")
@@ -182,10 +209,13 @@ else:
             safe_cols = [c for c in cols if c in df_snort.columns]
             st.dataframe(df_snort[safe_cols], use_container_width=True)
 
-    # ==========================================
-    # PESTAÑA 3: ZEEK
-    # ==========================================
-    with tab_zeek:
+# ==========================================
+# PESTAÑA 3: ZEEK
+# ==========================================
+with tab_zeek:
+    if df.empty:
+        st.info("Sin datos.")
+    else:
         # Filtramos lo que NO es IEC104 para no duplicar info
         df_zeek = df[(df['source'] == 'zeek') & (df.get('protocol') != 'iec104')]
         
@@ -199,10 +229,13 @@ else:
         
         st.dataframe(df_zeek.head(100), use_container_width=True)
 
-    # ==========================================
-    # PESTAÑA 4: INDUSTRIAL (SCADA)
-    # ==========================================
-    with tab_iec:
+# ==========================================
+# PESTAÑA 4: INDUSTRIAL (SCADA)
+# ==========================================
+with tab_iec:
+    if df.empty:
+        st.info("Sin datos.")
+    else:
         # Filtro robusto: Busca logs que sean explicitamente iec104 O que el protocolo sea iec104
         mask_iec = (df['sub_source'] == 'zeek_iec104') | (df.get('protocol') == 'iec104')
         df_iec = df[mask_iec].copy()
@@ -215,11 +248,8 @@ else:
             c1.metric("Paquetes IEC-104", len(df_iec))
             
             # --- FIX KEYERROR: Cálculo seguro de modas ---
-            
-            # 1. Trama más común
             top_trama = "N/A"
             if 'tipo_trama' in df_iec.columns:
-                # Eliminamos nulos antes de calcular la moda
                 series_trama = df_iec['tipo_trama'].dropna()
                 if not series_trama.empty:
                     modes_trama = series_trama.mode()
@@ -227,10 +257,8 @@ else:
                         top_trama = modes_trama.iloc[0]
             c2.metric("Trama más común", top_trama)
             
-            # 2. Instrucción más común
             top_instr = "N/A"
             if 'instruccion' in df_iec.columns:
-                # Eliminamos nulos antes de calcular la moda
                 series_instr = df_iec['instruccion'].dropna()
                 if not series_instr.empty:
                     modes_instr = series_instr.mode()
@@ -243,7 +271,6 @@ else:
             
             with col_chart1:
                 if 'instruccion' in df_iec.columns:
-                    # Filtrar nulos para el gráfico
                     df_pie = df_iec[df_iec['instruccion'].notna()]
                     if not df_pie.empty:
                         st.plotly_chart(px.pie(df_pie, names='instruccion', title="Distribución de Instrucciones"), use_container_width=True)
@@ -252,7 +279,6 @@ else:
             
             with col_chart2:
                 if 'tipo_trama' in df_iec.columns:
-                    # Filtrar nulos para el gráfico
                     df_bar = df_iec[df_iec['tipo_trama'].notna()]
                     if not df_bar.empty:
                         st.plotly_chart(px.bar(df_bar['tipo_trama'].value_counts(), title="Tipos de Trama (Control vs Datos)"), use_container_width=True)
@@ -265,5 +291,118 @@ else:
             safe_cols_iec = [c for c in cols_iec if c in df_iec.columns]
             st.dataframe(df_iec[safe_cols_iec], use_container_width=True)
 
-    with tab_raw:
+# ==========================================
+# PESTAÑA 5: VULNERABILIDADES & INVENTARIO (NUEVA)
+# ==========================================
+with tab_vuln:
+    st.header("🛡️ Gestión de Vulnerabilidades Industrial (OT)")
+    
+    col_inv, col_scan = st.columns([1, 2])
+
+    # --- COLUMNA IZQUIERDA: GESTIÓN DE INVENTARIO (JSON) ---
+    with col_inv:
+        st.subheader("🏭 Inventario de Activos")
+        st.caption("Lista de equipos monitoreados (Automático + Manual).")
+        
+        # 1. Cargar inventario actual
+        current_inv = []
+        if os.path.exists(INVENTORY_FILE):
+            try:
+                with open(INVENTORY_FILE, 'r') as f:
+                    current_inv = json.load(f).get("devices", [])
+            except:
+                st.error("Error leyendo JSON de inventario.")
+        
+        # 2. Selector para ver/borrar
+        selected_devices = st.multiselect(
+            "Equipos detectados:", 
+            options=current_inv, 
+            default=current_inv
+        )
+        
+        # Lógica de Borrado (Si el usuario quita algo del multiselect)
+        if len(selected_devices) < len(current_inv):
+            if st.button("💾 Guardar Cambios (Eliminar)"):
+                with open(INVENTORY_FILE, 'w') as f:
+                    json.dump({"devices": selected_devices}, f, indent=4)
+                st.success("Inventario actualizado.")
+                time.sleep(1)
+                st.rerun()
+        
+        st.divider()
+        
+        # 3. Input para agregar manualmente
+        new_dev = st.text_input("Agregar equipo manualmente:", placeholder="Ej: Siemens S7-1500")
+        if st.button("➕ Agregar al Inventario"):
+            if new_dev and new_dev not in selected_devices:
+                selected_devices.append(new_dev)
+                with open(INVENTORY_FILE, 'w') as f:
+                    json.dump({"devices": selected_devices}, f, indent=4)
+                st.success(f"Agregado: {new_dev}")
+                time.sleep(1)
+                st.rerun()
+            elif new_dev in selected_devices:
+                st.warning("El equipo ya existe en la lista.")
+
+    # --- COLUMNA DERECHA: REPORTE DE CVEs (CSV) ---
+    with col_scan:
+        st.subheader("🔍 Escaneo de Seguridad (NIST/NVD)")
+        
+        # Botón para ejecutar el script python_core/vuln_scanner.py
+        if st.button("🔄 Ejecutar Escaneo de Vulnerabilidades"):
+            with st.spinner("Consultando bases de datos internacionales..."):
+                # Ejecutamos el script usando la ruta absoluta calculada al inicio
+                exit_code = os.system(f'python3 "{SCANNER_SCRIPT}"')
+                
+                if exit_code == 0:
+                    st.success("Escaneo finalizado correctamente.")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("Hubo un error ejecutando el scanner. Revisa la consola para más detalles.")
+
+        # Visualización del Reporte
+        if os.path.exists(REPORT_FILE):
+            try:
+                df_cve = pd.read_csv(REPORT_FILE)
+                
+                if not df_cve.empty:
+                    # Métricas clave
+                    c1, c2, c3 = st.columns(3)
+                    criticas = df_cve[df_cve['Severidad'] == 'CRITICAL'].shape[0]
+                    altas = df_cve[df_cve['Severidad'] == 'HIGH'].shape[0]
+                    
+                    c1.metric("Críticas", criticas, delta="Urgent", delta_color="inverse")
+                    c2.metric("Altas", altas, delta="Review", delta_color="inverse")
+                    c3.metric("Total Hallazgos", len(df_cve))
+
+                    # Tabla Estilizada
+                    def color_severity(val):
+                        if val == 'CRITICAL': return 'background-color: #ff4b4b; color: white'
+                        elif val == 'HIGH': return 'background-color: #ffa500; color: black'
+                        return ''
+
+                    st.dataframe(
+                        df_cve.style.applymap(color_severity, subset=['Severidad']),
+                        use_container_width=True,
+                        column_config={
+                            "Link": st.column_config.LinkColumn("Detalle NVD"),
+                            "Score": st.column_config.ProgressColumn("CVSS Score", min_value=0, max_value=10, format="%.1f"),
+                        },
+                        hide_index=True
+                    )
+                else:
+                    st.info("✅ No se han encontrado vulnerabilidades conocidas para tus equipos.")
+            except Exception as e:
+                st.error(f"Error leyendo reporte: {e}")
+        else:
+            st.warning("⚠️ No hay reporte generado aún. Pulsa 'Ejecutar Escaneo'.")
+
+# ==========================================
+# PESTAÑA 6: LOGS
+# ==========================================
+with tab_raw:
+    if not df.empty:
         st.dataframe(df.head(50))
+    else:
+        st.info("Sin logs.")

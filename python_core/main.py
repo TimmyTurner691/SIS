@@ -8,6 +8,7 @@ from sklearn.ensemble import IsolationForest
 from datetime import datetime
 from collections import deque
 from elasticsearch import Elasticsearch
+from utils_alert import send_email_alert
 
 # ================= CONFIGURACIÓN =================
 REDIS_HOST = 'redis'
@@ -27,7 +28,6 @@ IA_CONTAMINATION = 0.05
 
 # ================= CONEXIONES =================
 def connect_services():
-    # 1. Redis
     r = None
     while not r:
         try:
@@ -38,7 +38,6 @@ def connect_services():
             print("⏳ Esperando a Redis...", flush=True)
             time.sleep(2)
 
-    # 2. Elasticsearch
     es = None
     while not es:
         try:
@@ -73,16 +72,9 @@ def parse_snort(line):
     except: return None
 
 def parse_zeek(line, log_type="conn"):
-    """
-    Parser Híbrido MEJORADO: Soporta JSON, TSV y extrae campos SCADA (IEC104)
-    """
     if not line or line.startswith('#'): return None
-    
     doc = {}
-
-    # --- 1. EXTRACCIÓN BÁSICA (JSON O TSV) ---
     try:
-        # A) Intento JSON
         try:
             data = json.loads(line)
             doc = {
@@ -96,12 +88,9 @@ def parse_zeek(line, log_type="conn"):
             }
             if data.get('service') == 'iec104':
                 doc['protocol'] = 'iec104'
-
         except json.JSONDecodeError:
-            # B) Fallback TSV (El formato de tus logs actuales)
             parts = line.split('\t')
             if len(parts) < 5: return None 
-            
             doc = {
                 "source": "zeek",
                 "sub_source": log_type,
@@ -111,71 +100,51 @@ def parse_zeek(line, log_type="conn"):
                 "raw_log": line[:800], 
                 "severity": "info"
             }
-            
-            # Detección básica de protocolo
             if "iec104" in line or "2404" in line:
                 doc['protocol'] = 'iec104'
+    except Exception as e: return None
 
-    except Exception as e: 
-        return None
-
-    # --- 2. LÓGICA DE EXTRACCIÓN SCADA (IEC-104) ---
-    # Inicializamos siempre para evitar KeyError en Dashboard
+    # Lógica SCADA IEC-104
     doc['instruccion'] = "N/A"
     doc['tipo_trama'] = "N/A"
-
     if doc.get('protocol') == 'iec104' or 'iec104' in doc.get('raw_log', ''):
         doc['protocol'] = 'iec104'
-        
-        # A) Buscar la INSTRUCCIÓN (ej: iec104::M_EI_NA_1)
         match_instr = re.search(r'iec104::([A-Za-z0-9_]+)', doc['raw_log'])
-        if match_instr:
-            doc['instruccion'] = match_instr.group(1)
-        
-        # B) Buscar el TIPO DE TRAMA (I, S, U) aislado entre tabulaciones
+        if match_instr: doc['instruccion'] = match_instr.group(1)
         match_type = re.search(r'\t([ISU])\t', doc['raw_log'])
         if match_type:
             raw_type = match_type.group(1)
             if raw_type == 'I': doc['tipo_trama'] = "I (Datos)"
             elif raw_type == 'S': doc['tipo_trama'] = "S (Supervisión)"
             elif raw_type == 'U': doc['tipo_trama'] = "U (Control)"
-
     return doc
 
 # ================= MAIN LOOP =================
 def main():
     r, es = connect_services()
-    
-    # Modelo ML
     model = IsolationForest(contamination=IA_CONTAMINATION, n_jobs=-1)
     history = deque(maxlen=IA_WINDOW_SIZE)
     is_trained = False
 
-    # Control de Archivos
     file_pointers = {k: 0 for k in LOG_FILES}
-    
-    # Ir al final de archivos existentes para no procesar el pasado
     for k, path in LOG_FILES.items():
         if os.path.exists(path):
             file_pointers[k] = os.path.getsize(path)
 
-    print("🚀 SIS Core: Ingesta Híbrida SCADA Activada", flush=True)
+    print("🚀 SIS Core: Ingesta Híbrida SCADA + Alertas Activada", flush=True)
 
     while True:
         time.sleep(1)
-        
         batch_events = []
         stats_snort = 0
         stats_total = 0
 
+        # 1. LECTURA DE LOGS
         for key, path in LOG_FILES.items():
             if not os.path.exists(path): continue
-            
             try:
                 current_size = os.path.getsize(path)
-                if current_size < file_pointers[key]:
-                    file_pointers[key] = 0 # Rotación detectada
-                
+                if current_size < file_pointers[key]: file_pointers[key] = 0
                 if current_size > file_pointers[key]:
                     with open(path, 'r') as f:
                         f.seek(file_pointers[key])
@@ -185,19 +154,16 @@ def main():
                                 doc = parse_snort(line)
                                 if doc: stats_snort += 1
                             else:
-                                # Aquí llamamos a la función mejorada
                                 doc = parse_zeek(line, key)
-                            
                             if doc:
                                 doc['@timestamp'] = datetime.now().isoformat()
                                 batch_events.append(doc)
                                 stats_total += 1
-                    
                     file_pointers[key] = current_size
             except Exception as e:
                 print(f"⚠️ Error leyendo {path}: {e}")
 
-        # --- LÓGICA IA ---
+        # 2. CÁLCULO DE IA (Anomalías)
         anomaly_score = 0.0
         is_anomaly = False
         
@@ -216,7 +182,29 @@ def main():
                 is_anomaly = True
                 anomaly_score = model.decision_function(features)[0]
 
-        # --- INDEXACIÓN ELASTIC ---
+        # 3. LÓGICA DE ALERTAS 
+        if stats_total > 0:
+            trigger_alert = False
+            alert_subject = ""
+            alert_body = ""
+
+            # Caso A: Ataque conocido (Snort)
+            if stats_snort > 0:
+                trigger_alert = True
+                alert_subject = f"Ataque detectado (Snort: {stats_snort} eventos)"
+                alert_body = f"Se han detectado firmas de ataque conocidas.\nLogs procesados: {stats_total}\nRevisar Dashboard inmediatamente."
+            
+            # Caso B: Anomalía desconocida (IA)
+            elif is_anomaly and anomaly_score < -0.6: 
+                trigger_alert = True
+                alert_subject = "Anomalía Crítica de IA en Tráfico SCADA"
+                alert_body = f"Patrón de tráfico inusual detectado.\nScore IA: {anomaly_score}\nPosible manipulación de proceso."
+
+            if trigger_alert:
+                print(f"📧 Enviando alerta: {alert_subject}")
+                send_email_alert(alert_subject, alert_body, level="CRITICAL")
+
+        # 4. INDEXACIÓN ELASTIC
         for doc in batch_events:
             doc['ai_anomaly'] = is_anomaly
             doc['ai_score'] = float(anomaly_score)
@@ -225,13 +213,12 @@ def main():
             except Exception as e:
                 print(f"❌ Error indexando en Elastic: {e}")
 
-        # --- REPORTE REDIS ---
+        # 5. REPORTE REDIS
         if stats_total > 0:
             color = "VERDE"
             if is_anomaly: color = "AMARILLO"
             if stats_snort > 0: color = "ROJO_CRITICO"
-            
-            print(f"📦 Procesados: {stats_total} | SCADA Logs: {'iec104' in path} | Estado: {color}", flush=True)
+            print(f"📦 Procesados: {stats_total} | Estado: {color}", flush=True)
 
 if __name__ == "__main__":
     main()
