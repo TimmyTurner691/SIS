@@ -1,3 +1,10 @@
 {
-    "devices": []
+    "devices": [
+        {
+            "name": "Moxa NPort 5110"
+        },
+        {
+            "name": "Moxa NPort 5110"
+        }
+    ]
 }
