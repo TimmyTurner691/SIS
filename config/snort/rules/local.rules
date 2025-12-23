@@ -1,20 +1,9 @@
-# -----------------------------------------------
-# REGLAS SCADA SIS - DETECCIÓN DE AMENAZAS
-# -----------------------------------------------
-
-# 1. Regla para detectar DoS (Palabra clave: "DoS")
-# Alerta si hay más de 10 paquetes TCP al puerto 2404 (IEC-104) en 1 segundo
-alert tcp any any -> any 2404 (msg:"[**] SCADA DoS Attack Detected [**]"; flags:S; threshold:type both, track by_dst, count 10, seconds 1; sid:1000001; rev:1; classtype:attempted-dos;)
-
-# 2. Regla para intentos de Exploit (Palabra clave: "Exploit")
-# Busca patrones hexadecimales comunes de shellcode o la palabra "exploit" en el payload
-alert tcp any any -> any any (msg:"[**] Possible SCADA Exploit Payload [**]"; content:"exploit"; nocase; sid:1000002; rev:1; classtype:attempted-admin;)
-
-# 3. Regla para Escaneo de Red (Palabra clave: "Scan")
-alert icmp any any -> any any (msg:"[**] Network Scan Detected (ICMP) [**]"; itype:8; threshold:type both, track by_src, count 5, seconds 1; sid:1000003; rev:1;)
-
-# 4. Regla específica para comando IEC-104 sospechoso
-alert tcp any any -> any 2404 (msg:"[**] IEC-104 Control Command Detected [**]"; content:"|68|"; depth:1; sid:1000004; rev:1;)
-
-# 5. Regla de prueba (Ping)
-alert icmp any any -> any any (msg:"[**] ICMP Ping Test [**]"; sid:1000005; rev:1;)
+# --- REGLAS LIMPIAS (CONFIG) ---
+# SID 1000001: IEC-104
+alert tcp any any -> any 2404 (msg:"SIS: IEC-104 Malicious"; content:"|68|"; depth:1; sid:1000001; rev:1;)
+# SID 1000002: Exploit
+alert tcp any any -> any any (msg:"SIS: Exploit Detected"; content:"exploit"; nocase; sid:1000002; rev:1;)
+# SID 1000003: DoS (SIMPLIFICADA)
+alert tcp any any -> any 2404 (msg:"SIS: SCADA DoS Check"; flags:S; sid:1000003; rev:1;)
+# Regla de prueba de conectividad
+alert icmp any any -> any any (msg:"[TEST] Ping Detectado en WiFi"; sid:1000005; rev:1;)
