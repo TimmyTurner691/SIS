@@ -1,3 +1,4 @@
+version: '3.8'
 
 services:
 
@@ -71,15 +72,19 @@ services:
   cerebro:
     build: ./python_core
     container_name: siem_cerebro
+    working_dir: /app
     volumes:
       - ./python_core:/app
       # Logs
       - ./logs/logs_zeek/logs/live:/var/log/zeek
       - ./logs/logs_snort:/var/log/snort
       - ./scripts:/scripts
-      # Archivos compartidos (Para que el backend también pueda actualizar inventario)
-      - ./ot_inventory.json:/ot_inventory.json
-      - ./cve_report.csv:/cve_report.csv
+      
+      # --- CORRECCIÓN CEREBRO ---
+      # Apuntamos a /app/archivo para que coincida con el código
+      - ./ot_inventory.json:/app/ot_inventory.json
+      - ./cve_report.csv:/app/cve_report.csv
+      
     environment:
       - REDIS_HOST=redis
       - ELASTIC_HOST=elasticsearch
@@ -102,12 +107,13 @@ services:
       - ./logs/logs_snort:/var/log/snort:ro
       - ./logs/logs_zeek/logs/live:/var/log/zeek:ro
       
-      # --- NUEVOS VOLÚMENES PARA EL SCANNER ---
-      # 1. Montamos la carpeta del backend para poder llamar al script
+      # Scripts auxiliares
       - ./python_core:/python_core
-      # 2. Montamos los archivos JSON y CSV en la raíz del contenedor
-      - ./ot_inventory.json:/ot_inventory.json
-      - ./cve_report.csv:/cve_report.csv
+      
+      # --- CORRECCIÓN DASHBOARD (CRUCIAL) ---
+      # Ahora el archivo se montará DENTRO de la carpeta de trabajo /app
+      - ./ot_inventory.json:/app/ot_inventory.json
+      - ./cve_report.csv:/app/cve_report.csv
       
     # Agregamos 'requests' a la instalación para que el scanner funcione
     command: >

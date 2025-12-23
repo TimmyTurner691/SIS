@@ -1,101 +1,119 @@
 import requests
-import pandas as pd
-import os
+import json
+import time
+import logging
 import sys
+import csv  # <--- IMPORTANTE: Necesitamos esto para escribir el archivo
 
-# Importamos la función de carga desde el script vecino
-try:
-    from inventory_manager import load_inventory
-except ImportError:
-    print("❌ Error: No se encuentra 'inventory_manager.py'. Asegúrate de que está en la misma carpeta.")
-    sys.exit(1)
+# Configuración de logs
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler(sys.stdout)
+formatter = logging.Formatter('DEBUG-SCANNER: %(asctime)s - %(message)s')
+handler.setFormatter(formatter)
+if not logger.handlers:
+    logger.addHandler(handler)
 
-# API del NIST (NVD)
-NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
-
-# Ubicación del reporte (También lo guardamos en la raíz para que el Dashboard lo vea)
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REPORT_FILE = os.path.join(BASE_DIR, "cve_report.csv")
-
-def check_cves(keyword):
-    print(f"🔍 Buscando vulnerabilidades para: {keyword}...")
+def scan_vulnerabilities(inventory_file):
+    report = []
+    
     try:
-        params = {
-            'keywordSearch': keyword,
-            'resultsPerPage': 5,
-            'sortOrder': 'DESC',
-        }
-        
-        # Timeout de 10s
-        r = requests.get(NVD_API_URL, params=params, timeout=10)
-        
-        if r.status_code != 200:
-            print(f"⚠️ Error API NVD ({r.status_code}) para {keyword}")
-            return []
-
-        data = r.json()
-        vulnerabilities = []
-
-        for item in data.get('vulnerabilities', []):
-            cve = item['cve']
-            metrics = cve.get('metrics', {})
-            
-            score = 0.0
-            severity = "UNKNOWN"
-            
-            if 'cvssMetricV31' in metrics:
-                data_v3 = metrics['cvssMetricV31'][0]['cvssData']
-                score = data_v3['baseScore']
-                severity = data_v3['baseSeverity']
-            elif 'cvssMetricV2' in metrics:
-                data_v2 = metrics['cvssMetricV2'][0]['cvssData']
-                score = data_v2['baseScore']
-                severity = "HIGH" if score >= 7.0 else "MEDIUM"
-
-            vulnerabilities.append({
-                "Dispositivo": keyword,
-                "CVE ID": cve['id'],
-                "Severidad": severity,
-                "Score": score,
-                "Descripción": cve['descriptions'][0]['value'][:150] + "...",
-                "Publicado": cve['published'][:10],
-                "Link": f"https://nvd.nist.gov/vuln/detail/{cve['id']}"
-            })
-            
-        return vulnerabilities
-
+        with open(inventory_file, 'r') as f:
+            data = json.load(f)
+            devices = data.get("devices", [])
     except Exception as e:
-        print(f"❌ Error conectando a NVD: {e}")
+        logger.error(f"❌ Error crítico leyendo archivo de inventario: {e}")
         return []
 
-def run_scan():
-    print("🚀 Iniciando escaneo de vulnerabilidades OT...")
-    
-    # 1. Cargar inventario dinámico
-    target_devices = load_inventory()
-    
-    if not target_devices:
-        print("⚠️ El inventario está vacío.")
-        return
+    NIST_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 
-    all_vulns = []
-    
-    # 2. Escanear cada dispositivo
-    for device in target_devices:
-        vulns = check_cves(device)
-        all_vulns.extend(vulns)
-    
-    # 3. Guardar resultados
-    if all_vulns:
-        df = pd.DataFrame(all_vulns)
-        df.sort_values(by="Score", ascending=False, inplace=True)
-        df.to_csv(REPORT_FILE, index=False)
-        print(f"✅ Reporte generado en: {REPORT_FILE} ({len(all_vulns)} hallazgos)")
-    else:
-        print("✅ No se encontraron vulnerabilidades recientes.")
-        # Crear CSV vacío con cabeceras para que el dashboard no falle
-        empty_df = pd.DataFrame(columns=["Dispositivo", "CVE ID", "Severidad", "Score", "Descripción", "Publicado", "Link"])
-        empty_df.to_csv(REPORT_FILE, index=False)
+    logger.info(f"🚀 Iniciando escaneo para {len(devices)} dispositivos...")
+
+    for device in devices:
+        # Detectar si es texto o diccionario
+        if isinstance(device, dict):
+            name = device.get("name")
+        elif isinstance(device, str):
+            name = device
+        else:
+            continue
+            
+        if not name:
+            continue
+            
+        logger.info(f"--------------------------------------------------")
+        logger.info(f"🔍 Consultando: '{name}'")
+        
+        params = {'keywordSearch': name, 'resultsPerPage': 5}
+        headers = {'User-Agent': 'SIS-Academic-Project/1.0'}
+
+        try:
+            logger.info(f"📡 Conectando a NIST...")
+            response = requests.get(NIST_API_URL, params=params, headers=headers, timeout=15)
+            
+            if response.status_code == 200:
+                data = response.json()
+                vulnerabilities = data.get("vulnerabilities", [])
+                logger.info(f"✅ Resultados encontrados: {len(vulnerabilities)}")
+
+                for item in vulnerabilities:
+                    cve_item = item.get("cve", {})
+                    cve_id = cve_item.get("id", "N/A")
+                    
+                    descriptions = cve_item.get("descriptions", [])
+                    desc_text = descriptions[0].get("value", "Sin descripción") if descriptions else "Sin descripción"
+                    
+                    metrics = cve_item.get("metrics", {})
+                    cvss_data = {}
+                    if "cvssMetricV31" in metrics:
+                        cvss_data = metrics["cvssMetricV31"][0].get("cvssData", {})
+                    elif "cvssMetricV30" in metrics:
+                        cvss_data = metrics["cvssMetricV30"][0].get("cvssData", {})
+                    elif "cvssMetricV2" in metrics:
+                         cvss_data = metrics["cvssMetricV2"][0].get("cvssData", {})
+                    
+                    score = cvss_data.get("baseScore", 0.0)
+                    severity = cvss_data.get("baseSeverity", "UNKNOWN")
+
+                    report.append({
+                        "device": name,
+                        "cve_id": cve_id,
+                        "description": desc_text,
+                        "severity": severity,
+                        "score": score,
+                        "link": f"https://nvd.nist.gov/vuln/detail/{cve_id}"
+                    })
+            else:
+                logger.error(f"❌ Error HTTP: {response.status_code}")
+
+        except Exception as e:
+            logger.error(f"🔌 Error de red: {e}")
+        
+        time.sleep(6)
+
+    logger.info(f"🏁 Escaneo finalizado. Total CVEs en memoria: {len(report)}")
+    return report
 
 if __name__ == "__main__":
-    run_scan()
+    # 1. Ejecutar el escaneo
+    results = scan_vulnerabilities("ot_inventory.json")
+    
+    # 2. GUARDAR LOS RESULTADOS EN CSV (¡ESTO FALTABA!)
+    csv_filename = "cve_report.csv"
+    try:
+        if results:
+            keys = results[0].keys()
+            with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
+                dict_writer = csv.DictWriter(f, fieldnames=keys)
+                dict_writer.writeheader()
+                dict_writer.writerows(results)
+            logger.info(f"💾 EXITO: Reporte guardado en '{csv_filename}'. El Dashboard ya puede leerlo.")
+        else:
+            # Si no hay resultados, creamos un archivo vacío con cabeceras para no romper el dashboard
+            with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(["device", "cve_id", "description", "severity", "score", "link"])
+            logger.warning("⚠️ Sin vulnerabilidades. Se generó reporte vacío.")
+            
+    except Exception as e:
+        logger.error(f"❌ Error guardando el archivo CSV: {e}")
