@@ -83,7 +83,6 @@ else:
 tab_risk, tab_snort, tab_net, tab_ot, tab_vuln, tab_raw = st.tabs([
     "🚨 Fusión de Riesgos", "🛡️ IDS", "🌐 Red", "🏭 SCADA", "⚠️ Vulnerabilidades", "📝 Logs Raw"
 ])
-
 # ==========================================
 # PESTAÑA 1: FUSIÓN DE RIESGOS (INCIDENT CARD)
 # ==========================================
@@ -103,22 +102,9 @@ with tab_risk:
 
         st.divider()
 
-        # MATRIZ VISUAL DE RIESGO
-        col_viz, col_incidents = st.columns([1, 2])
+        # MATRIZ VISUAL DE RIESGO - Cambiado el orden
+        col_incidents = st.columns(1)[0]  # Ocupa toda la página
         
-        with col_viz:
-            st.subheader("🎯 Matriz de Calor")
-            if not df.empty:
-                fig = px.density_heatmap(
-                    df, x="risk_impact", y="risk_probability", 
-                    nbinsx=5, nbinsy=5, 
-                    title="Amenaza (Y) vs Impacto (X)",
-                    range_x=[0.5, 5.5], range_y=[0.5, 5.5],
-                    color_continuous_scale="Reds"
-                )
-                fig.update_layout(xaxis_title="Vulnerabilidad Activo (CVE)", yaxis_title="Probabilidad Amenaza (MITRE/IA)")
-                st.plotly_chart(fig, use_container_width=True)
-
         with col_incidents:
             st.subheader("🕵️ Últimos Incidentes Detectados")
             # Filtrar solo eventos con riesgo relevante para no saturar
@@ -143,6 +129,24 @@ with tab_risk:
                 </div>
                 """
                 st.markdown(html_content, unsafe_allow_html=True)
+
+        st.divider()  # Separador entre secciones
+        
+        # Matriz de calor después de los incidentes
+        col_viz = st.columns(1)[0]  # Ocupa toda la página
+        
+        with col_viz:
+            st.subheader("🎯 Matriz de Calor")
+            if not df.empty:
+                fig = px.density_heatmap(
+                    df, x="risk_impact", y="risk_probability", 
+                    nbinsx=5, nbinsy=5, 
+                    title="Amenaza (Y) vs Impacto (X)",
+                    range_x=[0.5, 5.5], range_y=[0.5, 5.5],
+                    color_continuous_scale="Reds"
+                )
+                fig.update_layout(xaxis_title="Vulnerabilidad Activo (CVE)", yaxis_title="Probabilidad Amenaza (MITRE/IA)")
+                st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
 # PESTAÑA 2: SNORT (Sin Cambios)
