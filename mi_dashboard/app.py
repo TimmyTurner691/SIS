@@ -213,12 +213,52 @@ with tab_snort:
         st.info("✅ Sin alertas de intrusión detectadas.")
 
 # ==========================================
-# PESTAÑA 3: RED (Sin Cambios)
+# PESTAÑA 3: RED (Mejorada Visualmente)
 # ==========================================
 with tab_net:
-    if not df.empty:
-        st.dataframe(df[(df['source'] == 'zeek') & (df.get('protocol') != 'iec104')], use_container_width=True)
+    # 1. Filtramos datos de Zeek (Tráfico general, excluyendo lo que es puramente IEC104/SCADA si se prefiere)
+    # Usamos .copy() para evitar advertencias de pandas
+    df_net = df[(df['source'] == 'zeek') & (df.get('protocol') != 'iec104')].copy()
 
+    if not df_net.empty:
+        # 2. DEFINIR COLUMNAS (Mismo estilo que IDS)
+        # Agregamos 'service' que es común en Zeek/Network logs
+        lista_ordenada_red = [
+            '@timestamp',
+            'source',
+            'src_ip', 
+            'src_port',
+            'dst_ip', 
+            'dst_port',
+            'protocol',
+            'service',    # Zeek suele traer el servicio (dns, http, ssh)
+            'message',    # Información general del paquete
+            'raw_log'
+        ]
+        
+        # 3. Validar que las columnas existan en los datos
+        columnas_finales_red = [c for c in lista_ordenada_red if c in df_net.columns]
+        
+        # 4. Renderizar Tabla con Formato (Igual que IDS)
+        st.dataframe(
+            df_net[columnas_finales_red], 
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "@timestamp": st.column_config.DatetimeColumn("Fecha/Hora", format="DD/MM/YYYY HH:mm:ss"),
+                "source": "Fuente",
+                "src_ip": "Origen",
+                "src_port": "Pto. Org",
+                "dst_ip": "Destino",
+                "dst_port": "Pto. Dst",
+                "protocol": "Protocolo",
+                "service": "Servicio",
+                "message": "Info",
+                "raw_log": "Log Crudo"
+            }
+        )
+    else:
+        st.info("✅ Sin tráfico de red general registrado.")
 # ==========================================
 # PESTAÑA 4: SCADA (Sin Cambios)
 # ==========================================
