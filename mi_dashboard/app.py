@@ -51,6 +51,10 @@ def get_data(minutes=60, start=None, end=None, limit=5000):
         
         if not df.empty:
             df['@timestamp'] = pd.to_datetime(df['@timestamp'])
+            if df['@timestamp'].dt.tz is None:
+                df['@timestamp'] = df['@timestamp'].dt.tz_localize('UTC')
+            
+            df['@timestamp'] = df['@timestamp'].dt.tz_convert('America/Santiago')
             # Asegurar columnas nuevas existan
             cols_req = ['risk_total_score', 'risk_label', 'mitre_msg', 'risk_probability', 'risk_impact']
             for c in cols_req:
@@ -73,7 +77,7 @@ if modo == "En Vivo":
     mins = st.sidebar.slider("Minutos", 5, 1440, 60)
     if st.sidebar.button("🔄 Actualizar") or True:
         df = get_data(minutes=mins)
-        st.title(f"📡 Monitoreo en Tiempo Real ({mins} min)")
+        st.title("🛡️ SIS - SIEM Dashboard (En Vivo)")
 else:
     d1 = st.sidebar.date_input("Inicio"); d2 = st.sidebar.date_input("Fin")
     if st.sidebar.button("Buscar"):
@@ -106,7 +110,7 @@ with tab_risk:
         col_incidents = st.columns(1)[0]  # Ocupa toda la página
         
         with col_incidents:
-            st.subheader("🕵️ Últimos Incidentes Detectados")
+            st.subheader("Últimos Incidentes Detectados")
             # Filtrar solo eventos con riesgo relevante para no saturar
             df_risk = df[df['risk_total_score'] >= 8].drop_duplicates(subset=['src_ip', 'mitre_msg']).head(5)
             
@@ -136,7 +140,7 @@ with tab_risk:
         col_viz = st.columns(1)[0]  # Ocupa toda la página
         
         with col_viz:
-            st.subheader("🎯 Matriz de Calor")
+            st.subheader("Matriz de Calor")
             if not df.empty:
                 fig = px.density_heatmap(
                     df, x="risk_impact", y="risk_probability", 
@@ -149,12 +153,64 @@ with tab_risk:
                 st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
-# PESTAÑA 2: SNORT (Sin Cambios)
+# PESTAÑA 2: SNORT
 # ==========================================
 with tab_snort:
     if not df.empty and 'source' in df.columns:
-        st.dataframe(df[df['source'] == 'snort'], use_container_width=True)
-    else: st.info("Sin alertas.")
+        # 1. Filtramos datos de Snort
+        df_snort = df[df['source'] == 'snort'].copy()
+        
+        # --- HERRAMIENTA PARA VER COLUMNAS (Despliega esto en el dashboard) ---
+        with st.expander("🔍 Ver nombres de columnas disponibles (Debug)"):
+            st.write("Copia los nombres exactos de aquí y ponlos en la lista 'desired_order':")
+            st.write(df_snort.columns.tolist())
+        # ---------------------------------------------------------------------
+
+        # 2. TU LISTA DE ORDEN (Agrega aquí las columnas nuevas que encuentres arriba)
+        lista_ordenada = [
+            '@timestamp',
+            'source',
+            'risk_label', 
+            'risk_total_score', 
+            'src_ip', 
+            'src_port',    # <--- puerto origen
+            'dst_ip', 
+            'dst_port',    # <--- puerto destino
+            'protocol',    # <--- Protocolo
+            'message', 
+            'mitre_tactics', # <--- Tácticas MITRE
+            'mitre_techniques', # <--- Técnicas MITRE
+            'mitre_msg',    # <--- Mensaje MITRE
+            'risk_probability', # <--- Probabilidad de riesgo,
+            'risk_impact',     # <--- Impacto de riesgo,
+            'ai_score',       # <--- Puntuación IA,
+            'raw_log' ,     # <--- Log crudo
+        ]
+        
+        # 3. Filtramos para que solo muestre las que existen (evita errores)
+        columnas_finales = [c for c in lista_ordenada if c in df_snort.columns]
+        
+        # 4. Renderizamos la tabla bonita
+        st.dataframe(
+            df_snort[columnas_finales], 
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "@timestamp": st.column_config.DatetimeColumn("Fecha/Hora", format="DD/MM/YYYY HH:mm:ss"),
+                "risk_label": "Nivel",
+                "source": "Fuente",
+                "risk_total_score": "Score",
+                "src_ip": "Origen",
+                "dst_ip": "Destino",
+                "message": "Mensaje",
+                "raw_log": "Log Crudo"
+                # Si agregas columnas arriba (ej. 'src_port'), no es obligatorio ponerlas aquí, 
+                # pero si quieres cambiarles el nombre del encabezado, agrégalas así:
+                # "src_port": "Puerto Origen"
+            }
+        )
+    else: 
+        st.info("✅ Sin alertas de intrusión detectadas.")
 
 # ==========================================
 # PESTAÑA 3: RED (Sin Cambios)
