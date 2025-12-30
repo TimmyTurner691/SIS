@@ -2,14 +2,13 @@
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import os
 
-# CONFIGURACIÓN (Idealmente usa variables de entorno en producción)
-SMTP_SERVER = "smtp.gmail.com" # O tu servidor corporativo
+# --- CONFIGURACIÓN ---
+SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-SENDER_EMAIL = "tu_correo@gmail.com"
-SENDER_PASSWORD = "tu_contraseña_de_aplicacion" # Ojo: En Gmail usa "App Password", no tu clave normal
-RECEIVER_EMAIL = "operador_sala_control@empresa.com"
+SENDER_EMAIL = "segnetsis@gmail.com"  # <--- TU CORREO
+SENDER_PASSWORD = "ects hifw guee udap"               # <--- TU CLAVE DE 16 LETRAS
+RECEIVER_EMAIL = "mvallejos.sa@gmail.com"         # <--- DESTINATARIO
 
 def send_email_alert(subject, body, level="INFO"):
     try:
@@ -20,7 +19,6 @@ def send_email_alert(subject, body, level="INFO"):
 
         msg.attach(MIMEText(body, 'plain'))
 
-        # Conexión Segura
         server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
         server.starttls()
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
@@ -28,8 +26,8 @@ def send_email_alert(subject, body, level="INFO"):
         server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, text)
         server.quit()
         
-        print(f"📧 Alerta enviada a {RECEIVER_EMAIL}")
+        print(f"📧 [EMAIL] Enviado a {RECEIVER_EMAIL} | Asunto: {subject}", flush=True)
         return True
     except Exception as e:
-        print(f"❌ Error enviando correo: {e}")
+        print(f"❌ [EMAIL] Error: {e}", flush=True)
         return False

@@ -1,0 +1,2 @@
+ip,device,cve_id,severity
+192.168.1.66,Reactor_Core,CVE-2025-0001,CRITICAL

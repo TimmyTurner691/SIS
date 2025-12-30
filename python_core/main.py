@@ -12,7 +12,10 @@ from elasticsearch import Elasticsearch
 import warnings
 from elasticsearch import ElasticsearchWarning
 
-# Silenciar warnings de seguridad de Elastic (solo para entorno de pruebas)
+# IMPORTAMOS TU MÓDULO DE ALERTAS
+from utils_alert import send_email_alert 
+
+# Silenciar warnings
 warnings.filterwarnings("ignore", category=ElasticsearchWarning)
 
 # ================= CONFIGURACIÓN =================
@@ -21,7 +24,6 @@ ELASTIC_HOST = 'http://elasticsearch:9200'
 INDEX_NAME = 'sis-logs-v1'
 CVE_REPORT_PATH = '/app/cve_report.csv'
 
-# Mapeo de archivos de logs
 LOG_FILES = {
     'snort': '/var/log/snort/alert',
     'zeek_conn': '/var/log/zeek/conn.log',
@@ -63,8 +65,16 @@ class MitreICSCorrelator:
             dst_port = str(log_json.get('dst_port', ''))
             proto = str(log_json.get('protocol', '')).lower()
             
+            # Detectar IEC-104 o Modbus
             if 'iec104' in proto or dst_port in ['2404', '502', '102', '44818']:
                 detected.append(self.mitre_rules['c2_ot'])
+                
+                # REGLA CUSTOM: Si es IEC-104 y vemos un paquete pequeño sospechoso (Type 45 OFF)
+                # Esto es una heurística simple basada en el raw log si está disponible
+                raw = log_json.get('raw_log', '')
+                if 'iec104' in proto and len(raw) > 0:
+                     # Si quisieramos detectar algo muy específico aquí
+                     pass
             
             if log_json.get('ai_score', 0) < -0.6: 
                  detected.append(self.mitre_rules['discovery'])
@@ -99,30 +109,79 @@ class RiskFusionEngine:
     def __init__(self, mitre_engine):
         self.mitre = mitre_engine
         self.cve_db = pd.DataFrame()
-        self.cargar_cves()
+        self.cve_path = '/app/cve_report.csv'
+        self.inventory = {} 
+        self.inventory_path = '/app/ot_inventory.json'
+        
+        self.cargar_datos()
 
-    def cargar_cves(self):
-        if os.path.exists(CVE_REPORT_PATH):
+    def cargar_datos(self):
+        # 1. Cargar CVEs (Técnico)
+        if os.path.exists(self.cve_path):
             try:
-                self.cve_db = pd.read_csv(CVE_REPORT_PATH)
+                # Intentamos leer ignorando errores de formato y limpiando espacios
+                self.cve_db = pd.read_csv(self.cve_path, skipinitialspace=True)
+                
+                # Normalizamos nombres de columnas a minúsculas para evitar errores (IP vs ip)
+                self.cve_db.columns = [c.lower().strip() for c in self.cve_db.columns]
+                
+                print(f"✅ CVE Database cargada. Columnas detectadas: {list(self.cve_db.columns)}", flush=True)
+                
+                # Asegurar que la columna ip sea string
                 if 'ip' in self.cve_db.columns:
                     self.cve_db['ip'] = self.cve_db['ip'].astype(str)
+                else:
+                    print("⚠️ ADVERTENCIA: No se encontró la columna 'ip' en cve_report.csv", flush=True)
+                    
+            except Exception as e:
+                print(f"⚠️ Error cargando CVEs: {e}", flush=True)
+                self.cve_db = pd.DataFrame() # DataFrame vacío por seguridad
+
+        # 2. Cargar Inventario (Operativo)
+        if os.path.exists(self.inventory_path):
+            try:
+                with open(self.inventory_path, 'r') as f:
+                    data = json.load(f)
+                    for item in data:
+                        self.inventory[item.get('ip')] = item.get('criticality', 'LOW')
+                print(f"✅ Inventario Operativo cargado ({len(self.inventory)} activos).", flush=True)
             except: pass
 
-    def obtener_impacto_activo(self, ip_destino):
-        if self.cve_db.empty or ip_destino == "0.0.0.0": return 2 
+    def get_score_from_label(self, label):
+        label = str(label).upper()
+        if 'CRITICAL' in label: return 5
+        if 'HIGH' in label: return 4
+        if 'MEDIUM' in label: return 3
+        if 'LOW' in label: return 1
+        return 2 
+
+    def calcular_impacto_unificado(self, ip_destino):
+        ip_str = str(ip_destino)
         
-        vulns = self.cve_db[
-            (self.cve_db.get('ip') == str(ip_destino)) | 
-            (self.cve_db['device'].astype(str).str.contains(str(ip_destino), na=False))
-        ]
+        # --- FACTOR 1: Importancia Operativa (JSON) ---
+        label_ops = self.inventory.get(ip_str, 'UNKNOWN')
+        score_ops = self.get_score_from_label(label_ops)
         
-        if not vulns.empty:
-            severities = vulns['severity'].str.upper().tolist()
-            if 'CRITICAL' in severities: return 5
-            if 'HIGH' in severities: return 4
-            if 'MEDIUM' in severities: return 3
-        return 2
+        # --- FACTOR 2: Vulnerabilidad Técnica (CSV) ---
+        score_cve = 1
+        
+        # VERIFICACIÓN DE SEGURIDAD (Aquí fallaba antes)
+        if not self.cve_db.empty and 'ip' in self.cve_db.columns and 'severity' in self.cve_db.columns:
+            try:
+                vulns = self.cve_db[self.cve_db['ip'] == ip_str]
+                if not vulns.empty:
+                    severities = vulns['severity'].apply(self.get_score_from_label)
+                    if not severities.empty:
+                        score_cve = severities.max()
+            except Exception as e:
+                # Si falla algo aquí, solo imprimimos y seguimos con score 1
+                # No detenemos el loop principal
+                pass
+        
+        # --- LA LICUADORA ---
+        impacto_final = max(score_ops, score_cve)
+        
+        return impacto_final, score_ops, score_cve
 
     def evaluar(self, doc, ml_anomaly_score):
         mitre_data = self.mitre.procesar_evento(doc.get('src_ip'), doc)
@@ -130,7 +189,6 @@ class RiskFusionEngine:
         ia_risk = 1
         if ml_anomaly_score < -0.7: ia_risk = 5
         elif ml_anomaly_score < -0.6: ia_risk = 4
-        elif ml_anomaly_score < -0.5: ia_risk = 3
         
         mitre_risk = 1
         m_score = mitre_data['mitre_score']
@@ -139,24 +197,30 @@ class RiskFusionEngine:
         elif m_score >= 10: mitre_risk = 3
         
         probabilidad = max(ia_risk, mitre_risk)
-        impacto = self.obtener_impacto_activo(doc.get('dst_ip'))
+        
+        # Calculamos impacto de forma segura
+        impacto, score_ops, score_cve = self.calcular_impacto_unificado(doc.get('dst_ip'))
+        
         total_score = probabilidad * impacto
         
         label = "BAJO"
         if total_score >= 17: label = "CRÍTICO"
-        elif total_score >= 8: label = "MEDIO"
+        elif total_score >= 10: label = "MEDIO"
 
         doc.update({
             "risk_total_score": total_score,
             "risk_label": label,
             "risk_probability": probabilidad,
             "risk_impact": impacto,
-            "mitre_tactics": mitre_data['mitre_tactics'],
-            "mitre_techniques": mitre_data['mitre_techniques'],
-            "mitre_msg": mitre_data['mitre_msg']
+            "impact_details": {
+                "operational_score": int(score_ops),
+                "vulnerability_score": int(score_cve)
+            },
+            "mitre_msg": mitre_data['mitre_msg'],
+            "mitre_tactics": mitre_data['mitre_tactics']
         })
         return doc, total_score
-
+    
 # ================= PARSERS =================
 def connect_services():
     r = None; es = None
@@ -228,7 +292,10 @@ def main():
     mitre_engine = MitreICSCorrelator()
     fusion_engine = RiskFusionEngine(mitre_engine)
 
-    # 1. INICIALIZAR PUNTEROS AL FINAL (SEEK END)
+    # Control de alertas (Anti-Spam de correos)
+    # Diccionario: { 'IP_ATACANTE': timestamp_ultima_alerta }
+    alert_cooldown = {} 
+
     file_pointers = {}
     for k, p in LOG_FILES.items():
         if os.path.exists(p):
@@ -244,24 +311,17 @@ def main():
         for key, path in LOG_FILES.items():
             if not os.path.exists(path): continue
             
-            # Verificar si hay cambios reales en el tamaño
             try:
                 current_size = os.path.getsize(path)
-                
-                # Caso rotación de logs (archivo más chico que antes)
                 if current_size < file_pointers[key]:
                     file_pointers[key] = 0
                 
-                # SI HAY DATOS NUEVOS
                 if current_size > file_pointers[key]:
                     with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                         f.seek(file_pointers[key])
                         lines = f.readlines()
-                        
-                        # ¡CRUCIAL! Actualizamos el puntero AQUÍ MISMO usando tell()
                         file_pointers[key] = f.tell()
 
-                        # Ahora procesamos las líneas leídas en memoria
                         batch_docs = []
                         stats_snort = 0; stats_total = 0
 
@@ -273,7 +333,7 @@ def main():
                                 if key == 'snort': stats_snort += 1
                                 stats_total += 1
                         
-                        # --- LÓGICA DE IA Y ENVIO ---
+                        # --- IA UPDATE ---
                         anomaly_score = 0.5
                         if stats_total > 0:
                             history.append([stats_snort, stats_total])
@@ -286,9 +346,37 @@ def main():
                                     if model.predict(features)[0] == -1:
                                         anomaly_score = float(model.decision_function(features)[0])
                         
+                        # --- PROCESAMIENTO Y ALERTAS ---
                         for doc in batch_docs:
                             doc['ai_score'] = float(anomaly_score)
                             final_doc, risk = fusion_engine.evaluar(doc, anomaly_score)
+                            
+                            # >>> AQUÍ ESTÁ LA LÓGICA DE ALERTA <<<
+                            if final_doc.get('risk_label') == 'CRÍTICO':
+                                ip_atacante = final_doc.get('src_ip', 'unknown')
+                                now = time.time()
+                                
+                                # Solo enviar correo si pasaron más de 60 seg desde la última alerta para esta IP
+                                last_alert = alert_cooldown.get(ip_atacante, 0)
+                                if (now - last_alert) > 60:
+                                    asunto = f"{final_doc.get('mitre_msg', 'Ataque Detectado')}"
+                                    cuerpo = f"""
+                                    ⚠️ ALERTA DE SEGURIDAD INDUSTRIAL CRÍTICA ⚠️
+                                    
+                                    IP Origen: {ip_atacante}
+                                    IP Destino: {final_doc.get('dst_ip')}
+                                    Protocolo: {final_doc.get('protocol')}
+                                    Riesgo Score: {risk}
+                                    Tácticas MITRE: {final_doc.get('mitre_tactics')}
+                                    Mensaje: {final_doc.get('mitre_msg')}
+                                    
+                                    El sistema ha registrado actividad maliciosa de alto impacto.
+                                    """
+                                    send_email_alert(asunto, cuerpo, level="CRITICAL")
+                                    
+                                    # Actualizar cooldown
+                                    alert_cooldown[ip_atacante] = now
+
                             try: es.index(index=INDEX_NAME, document=final_doc)
                             except Exception as e: print(f"Error ES: {e}", flush=True)
                             
