@@ -69,8 +69,7 @@ class MitreICSCorrelator:
             if 'iec104' in proto or dst_port in ['2404', '502', '102', '44818']:
                 detected.append(self.mitre_rules['c2_ot'])
                 
-                # REGLA CUSTOM: Si es IEC-104 y vemos un paquete pequeño sospechoso (Type 45 OFF)
-                # Esto es una heurística simple basada en el raw log si está disponible
+                # REGLA CUSTOM: Detección de comandos IEC-104 específicos(sin acción por ahora)
                 raw = log_json.get('raw_log', '')
                 if 'iec104' in proto and len(raw) > 0:
                      # Si quisieramos detectar algo muy específico aquí
@@ -165,7 +164,7 @@ class RiskFusionEngine:
         # --- FACTOR 2: Vulnerabilidad Técnica (CSV) ---
         score_cve = 1
         
-        # VERIFICACIÓN DE SEGURIDAD (Aquí fallaba antes)
+        # VERIFICACIÓN DE SEGURIDAD 
         if not self.cve_db.empty and 'ip' in self.cve_db.columns and 'severity' in self.cve_db.columns:
             try:
                 vulns = self.cve_db[self.cve_db['ip'] == ip_str]
@@ -178,7 +177,7 @@ class RiskFusionEngine:
                 # No detenemos el loop principal
                 pass
         
-        # --- LA LICUADORA ---
+        # --- IMPACTO FINAL ---
         impacto_final = max(score_ops, score_cve)
         
         return impacto_final, score_ops, score_cve
@@ -221,7 +220,7 @@ class RiskFusionEngine:
         })
         return doc, total_score
     
-# ================= PARSERS =================
+# ================= PARSERS INGESTA Y NORMALIZACIÓN =================
 def connect_services():
     r = None; es = None
     while not r:
