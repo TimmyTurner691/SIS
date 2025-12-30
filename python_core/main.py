@@ -9,7 +9,6 @@ from sklearn.ensemble import IsolationForest
 from datetime import datetime
 from collections import deque
 from elasticsearch import Elasticsearch
-from utils_alert import send_email_alert
 
 # ================= CONFIGURACIÓN =================
 REDIS_HOST = 'redis'
@@ -255,7 +254,6 @@ def main():
                         lines = f.readlines()
                         
                         # ¡CRUCIAL! Actualizamos el puntero AQUÍ MISMO usando tell()
-                        # Esto asegura que sepamos exactamente qué ya leímos
                         file_pointers[key] = f.tell()
 
                         # Ahora procesamos las líneas leídas en memoria
@@ -293,8 +291,6 @@ def main():
                              print(f"📦 {key.upper()}: Procesados {len(batch_docs)} eventos.", flush=True)
 
             except Exception as e:
-                # Si falla algo leyendo el archivo (permisos, etc), no hacemos nada critico
-                # pero el puntero ya se actualizó arriba si el 'readlines' funcionó
                 print(f"⚠️ Error loop principal: {e}", flush=True)
 
 if __name__ == "__main__":
