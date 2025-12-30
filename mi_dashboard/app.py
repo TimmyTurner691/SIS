@@ -241,17 +241,84 @@ with tab_snort:
     else: 
         st.info("✅ Sin alertas de intrusión detectadas.")
 # ==========================================
-# PESTAÑA 3: RED 
+# PESTAÑA 3: TRÁFICO DE RED (ZEEK / GENERAL)
 # ==========================================
 with tab_net:
+    # Filtramos Zeek pero sacamos IEC104 (ese va a la pestaña SCADA)
     if not df.empty:
-        # Usamos .get() o rellenamos antes para evitar crash
-        mask = (df['source'] == 'zeek') & (df['protocol'] != 'iec104')
-        df_net = df[mask].copy()
-        st.dataframe(df_net, use_container_width=True)
+        mask_net = (df['source'] == 'zeek') & (df['protocol'] != 'iec104')
+        df_net = df[mask_net].copy()
     else:
-        st.info("✅ Sin tráfico de red general registrado.")
+        df_net = pd.DataFrame()
 
+    if not df_net.empty:
+        # 1. ESTRATEGIA DE ORDENAMIENTO
+        # Definimos las columnas VIP que queremos ver primero
+        cols_prioridad = [
+            '@timestamp', 
+            'protocol', 
+            'service', 
+            'src_ip', 
+            'src_port', 
+            'dst_ip', 
+            'dst_port', 
+            'conn_state',  # Estado de conexión (S0, SF, REJ...)
+            'duration', 
+            'orig_bytes', 
+            'resp_bytes'
+        ]
+        
+        # 2. CÁLCULO DINÁMICO DE COLUMNAS
+        # Buscamos el resto de columnas que tenga el dataframe (metadata, uids, etc.)
+        # para no ocultar nada, tal como pediste.
+        cols_existentes = df_net.columns.tolist()
+        
+        # Filtramos las prioritarias que realmente existen en los datos
+        vip_reales = [c for c in cols_prioridad if c in cols_existentes]
+        
+        # Agregamos el resto de columnas al final (Cola)
+        resto_cols = [c for c in cols_existentes if c not in vip_reales]
+        
+        # Orden final: VIP + El Resto
+        orden_final = vip_reales + resto_cols
+        
+        # Reordenamos el DataFrame
+        view_df = df_net[orden_final].copy()
+
+        # 3. VISUALIZACIÓN
+        st.dataframe(
+            view_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "@timestamp": st.column_config.DatetimeColumn(
+                    "📅 Fecha/Hora",
+                    format="DD/MM/YYYY HH:mm:ss",
+                    width="medium"
+                ),
+                "protocol": st.column_config.TextColumn(
+                    "Proto", width="small"
+                ),
+                "service": st.column_config.TextColumn(
+                    "Servicio", width="small"
+                ),
+                "src_ip": "Origen IP",
+                "src_port": st.column_config.NumberColumn("Puerto Origen", format="%d"),
+                "dst_ip": "Destino IP",
+                "dst_port": st.column_config.NumberColumn("Puerto Destino", format="%d"),
+                "conn_state": st.column_config.TextColumn(
+                    "Estado", 
+                    help="SF: Normal, S0: Intento sin respuesta, REJ: Rechazado",
+                    width="small"
+                ),
+                "duration": st.column_config.NumberColumn("Duración (s)", format="%.4f"),
+                "orig_bytes": st.column_config.NumberColumn("Bytes Env.", format="%d"),
+                "resp_bytes": st.column_config.NumberColumn("Bytes Recib.", format="%d")
+            }
+        )
+        st.caption(f"Visualizando {len(df_net)} conexiones de red. Las columnas adicionales están a la derecha.")
+    else:
+        st.info("✅ Sin tráfico de red general registrado (excluyendo SCADA).")
 # ==========================================
 # PESTAÑA 4: SCADA
 # ==========================================
