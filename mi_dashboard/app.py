@@ -184,16 +184,62 @@ with tab_risk:
                 )
                 fig.update_layout(xaxis_title="Vulnerabilidad Activo (CVE)", yaxis_title="Probabilidad Amenaza (MITRE/IA)")
                 st.plotly_chart(fig, use_container_width=True)
-# ==========================================
-# PESTAÑA 2: SNORT
+## ==========================================
+# PESTAÑA 2: SNORT (IDS + ARREGLO MENSAJE)
 # ==========================================
 with tab_snort:
     if not df.empty and 'source' in df.columns:
         df_snort = df[df['source'] == 'snort'].copy()
-        st.dataframe(df_snort, use_container_width=True)
+        
+        if not df_snort.empty:
+            
+            # --- FUNCIÓN MEJORADA ---
+            def extraer_mensaje_real(row):
+                raw = str(row.get('raw_log', ''))
+                # Busca el patrón [1:100:1] y toma lo que sigue a la derecha
+                import re
+                match = re.search(r'\[\d+:\d+:\d+\]\s+(.*)', raw)
+                if match:
+                    msg = match.group(1).strip()
+                    # Quitamos basura final si existe
+                    return msg.replace('[**]', '').strip()
+                return "Alerta Snort (Ver Detalle)"
+            # ------------------------
+
+            # Aplicamos la función
+            df_snort['mensaje_limpio'] = df_snort.apply(extraer_mensaje_real, axis=1)
+
+            cols_to_show = [
+                '@timestamp', 'mensaje_limpio', 'risk_label', 
+                'risk_total_score', 'mitre_tactics', 'mitre_techniques',
+                'src_ip', 'dst_ip', 'raw_log'
+            ]
+            
+            # Filtro de columnas existentes
+            available_cols = [c for c in cols_to_show if c in df_snort.columns]
+            view_df = df_snort[available_cols].copy()
+
+            st.dataframe(
+                view_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "@timestamp": st.column_config.DatetimeColumn("📅 Fecha/Hora", format="DD/MM/YYYY HH:mm:ss", width="medium"),
+                    "mensaje_limpio": st.column_config.TextColumn("📢 Descripción del Ataque", width="large"),
+                    "risk_label": st.column_config.TextColumn("Nivel", width="small"),
+                    "risk_total_score": st.column_config.ProgressColumn("Score", format="%d", min_value=0, max_value=25, width="small"),
+                    "mitre_tactics": st.column_config.TextColumn("📚 Táctica", width="medium"),
+                    "mitre_techniques": st.column_config.TextColumn("🛠️ ID", width="small"),
+                    "src_ip": "Origen",
+                    "dst_ip": "Destino",
+                    "raw_log": st.column_config.TextColumn("📝 Log Crudo", width="large")
+                }
+            )
+            st.caption(f"Total de alertas mostradas: {len(df_snort)}")
+        else:
+            st.info("✅ No hay alertas de Snort en este periodo.")
     else: 
         st.info("✅ Sin alertas de intrusión detectadas.")
-
 # ==========================================
 # PESTAÑA 3: RED 
 # ==========================================
