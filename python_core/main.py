@@ -9,6 +9,11 @@ from sklearn.ensemble import IsolationForest
 from datetime import datetime
 from collections import deque
 from elasticsearch import Elasticsearch
+import warnings
+from elasticsearch import ElasticsearchWarning
+
+# Silenciar warnings de seguridad de Elastic (solo para entorno de pruebas)
+warnings.filterwarnings("ignore", category=ElasticsearchWarning)
 
 # ================= CONFIGURACIÓN =================
 REDIS_HOST = 'redis'
