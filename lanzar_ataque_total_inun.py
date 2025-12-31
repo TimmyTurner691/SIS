@@ -24,14 +24,14 @@ def configurar_archivos():
 
 def esperar_entrenamiento():
     print("\n🔄 Reiniciando cerebro...")
-    os.system("docker compose restart")
+    #os.system("docker compose restart")
     
     print("\n🧘 CALIBRANDO IA (Entrenando normalidad)...")
     print("   Necesitamos que la IA vea 'silencio' para contrastar el ataque.")
     print("   Espera 30 segundos...", end="", flush=True)
 
-    # Esperamos 60 segundos para llenar el deque history con ceros [0,0]
-    for i in range(60):
+    # Esperamos 30 segundos para llenar el deque history con ceros [0,0]
+    for i in range(30):
         time.sleep(1)
         if i % 5 == 0: print(".", end="", flush=True)
     print(" ¡LISTO!")
@@ -59,6 +59,6 @@ def lanzar_flood():
         print("❌ Error de permisos: Usa sudo.")
 
 if __name__ == "__main__":
-    configurar_archivos()
-    esperar_entrenamiento()
+    #configurar_archivos()
+    #esperar_entrenamiento()
     lanzar_flood()
