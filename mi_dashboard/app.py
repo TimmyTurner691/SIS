@@ -235,7 +235,7 @@ with tab_risk:
                 """
                 st.markdown(html_content, unsafe_allow_html=True)
 
-        """st.divider()
+        st.divider()
         col_viz = st.columns(1)[0]
         with col_viz:
             st.subheader("Matriz de Calor")
@@ -244,7 +244,7 @@ with tab_risk:
                     df, x="risk_impact", y="risk_probability", nbinsx=5, nbinsy=5, 
                     title="Amenaza (Y) vs Impacto (X)", range_x=[0.5, 5.5], range_y=[0.5, 5.5], color_continuous_scale="Reds"
                 )
-                st.plotly_chart(fig, use_container_width=True)"""
+                st.plotly_chart(fig, use_container_width=True)
 
 # ---------------- PESTAÑA 2: SNORT ----------------
 with tab_snort:
@@ -282,29 +282,171 @@ with tab_ot:
     else:
         st.info("🏭 Esperando tráfico industrial...")
 
-# ---------------- PESTAÑA 5: VULNERABILIDADES ----------------
+# ---------------- PESTAÑA 5: VULNERABILIDADES (MEJORADA) ----------------
 with tab_vuln:
     st.header("🛡️ Gestión de Vulnerabilidades")
-    c1, c2 = st.columns([1,2])
+    
+    # Dividimos la pantalla: Izquierda (Gestión Inventario), Derecha (Reporte CVEs)
+    c1, c2 = st.columns([1, 2])
+    
+    # --- COLUMNA IZQUIERDA: GESTIÓN DE INVENTARIO ---
     with c1:
-        st.subheader("Inventario")
+        st.subheader("📦 Inventario Operativo")
+        
+        # 1. FORMULARIO DE ALTA (Usamos st.form para agrupar los inputs)
+        with st.form("form_add_asset", clear_on_submit=True):
+            st.markdown("#### ➕ Agregar Nuevo Activo")
+            
+            # Campos de entrada correspondientes a tu estructura JSON
+            new_ip = st.text_input("Dirección IP", placeholder="Ej: 192.168.1.50")
+            new_name = st.text_input("Nombre del Dispositivo", placeholder="Ej: PLC_Hornos")
+            new_crit = st.selectbox("Nivel de Criticidad", ["LOW", "MEDIUM", "HIGH", "CRITICAL"])
+            
+            # Botón de envío dentro del form
+            submitted = st.form_submit_button("💾 Guardar Activo")
+            
+            if submitted:
+                if new_ip and new_name:
+                    try:
+                        # A. Leer datos existentes
+                        current_data = []
+                        if os.path.exists(INVENTORY_FILE):
+                            with open(INVENTORY_FILE, 'r') as f:
+                                try:
+                                    content = f.read()
+                                    if content: # Si no está vacío
+                                        current_data = json.loads(content)
+                                except json.JSONDecodeError:
+                                    current_data = [] # Si el archivo está corrupto, empezamos de cero
+
+                        # B. Crear el nuevo objeto con TU estructura exacta
+                        new_entry = {
+                            "ip": new_ip.strip(),
+                            "name": new_name.strip(),
+                            "criticality": new_crit
+                        }
+                        
+                        # C. Validar duplicados (Opcional: chequear si la IP ya existe)
+                        # Filtramos si ya existía esa IP para actualizarla, o simplemente agregamos
+                        current_data = [x for x in current_data if x.get('ip') != new_entry['ip']]
+                        current_data.append(new_entry)
+                        
+                        # D. Guardar en disco
+                        with open(INVENTORY_FILE, 'w') as f:
+                            json.dump(current_data, f, indent=4)
+                            
+                        st.success(f"✅ Guardado: {new_name} ({new_ip})")
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error al guardar: {e}")
+                else:
+                    st.warning("⚠️ Debes ingresar al menos IP y Nombre.")
+
+        # 2. VISUALIZACIÓN DEL INVENTARIO ACTUAL
+        st.divider()
+        st.markdown("#### 📋 Activos Registrados")
         if os.path.exists(INVENTORY_FILE):
-            with open(INVENTORY_FILE) as f: st.json(json.load(f))
-        new_dev = st.text_input("Agregar Activo OT:")
-        if st.button("➕ Añadir"):
             try:
-                with open(INVENTORY_FILE, 'r+') as f:
-                    d = json.load(f); d['devices'].append({"name": new_dev})
-                    f.seek(0); json.dump(d, f, indent=4)
-                st.success("Añadido")
-            except: pass
+                with open(INVENTORY_FILE, 'r') as f:
+                    inventory_data = json.load(f)
+                
+                if inventory_data:
+                    # Mostramos como tabla pequeña
+                    df_inv = pd.DataFrame(inventory_data)
+                    st.dataframe(
+                        df_inv, 
+                        column_config={
+                            "ip": "IP",
+                            "name": "Nombre",
+                            "criticality": st.column_config.SelectboxColumn(
+                                "Criticidad",
+                                options=["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+                                disabled=True # Solo lectura aquí
+                            )
+                        },
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                else:
+                    st.info("El inventario está vacío.")
+            except:
+                st.warning("No se pudo leer el archivo de inventario.")
+
+    # --- COLUMNA DERECHA: REPORTE DE VULNERABILIDADES (CVEs) ---
     with c2:
-        st.subheader("Reporte CVEs")
-        if st.button("🔄 Escanear Ahora"):
-            subprocess.run(["python3", SCANNER_SCRIPT])
-            st.success("Escaneo completado")
+        st.subheader("🔍 Escáner de Vulnerabilidades (CVEs)")
+        
+        col_btn, col_info = st.columns([1, 3])
+        
+        # Variable de estado para saber si acabamos de escanear
+        scan_done = False
+
+        with col_btn:
+            if st.button("🚀 Iniciar Escaneo", type="primary"):
+                with st.spinner("Escaneando activos contra base de datos CVE..."):
+                    try:
+                        # 1. Ejecutar el script
+                        # check=True lanza una excepción si el script falla
+                        result = subprocess.run(["python3", SCANNER_SCRIPT], capture_output=True, text=True, check=False)
+                        
+                        if result.returncode == 0:
+                            st.success("Escaneo finalizado.")
+                            scan_done = True # Marcamos éxito
+                            
+                            # TRUCO: Limpiamos la caché de Streamlit para obligar a releer el CSV nuevo
+                            st.cache_data.clear()
+                        else:
+                            st.error(f"El escáner reportó un error:\n{result.stderr}")
+                            
+                    except Exception as e:
+                        st.error(f"Fallo crítico al ejecutar script: {e}")
+        
+        # --- LÓGICA DE VISUALIZACIÓN DE LA TABLA (BLINDADA) ---
         if os.path.exists(REPORT_FILE):
-            st.dataframe(pd.read_csv(REPORT_FILE), use_container_width=True)
+            try:
+                # 2. Leemos el CSV
+                # on_bad_lines='skip' evita que el sistema explote si hay una línea mal escrita
+                df_cve = pd.read_csv(REPORT_FILE, on_bad_lines='skip')
+                
+                if not df_cve.empty:
+                    # 3. NORMALIZACIÓN DE COLUMNAS (La solución al "choque de formatos")
+                    # Convertimos todo a minúsculas y quitamos espacios: " Severity " -> "severity"
+                    df_cve.columns = [c.lower().strip() for c in df_cve.columns]
+                    
+                    # Verificamos si tenemos las columnas necesarias, si no, las creamos vacías
+                    required_cols = ['ip', 'cve_id', 'severity', 'description']
+                    for col in required_cols:
+                        if col not in df_cve.columns:
+                            df_cve[col] = "N/A"
+
+                    # 4. Mostrar Tabla
+                    st.dataframe(
+                        df_cve, 
+                        use_container_width=True,
+                        column_config={
+                            "ip": "Activo IP",
+                            "severity": st.column_config.TextColumn(
+                                "Severidad",
+                                help="Nivel de riesgo CVSS",
+                                validate="^.*$" # Acepta cualquier texto
+                            ),
+                            "cve_id": "ID CVE",
+                            "description": "Descripción Técnica"
+                        }
+                    )
+                    
+                    # Mostrar contador simple
+                    st.caption(f"Total vulnerabilidades detectadas: {len(df_cve)}")
+                    
+                else:
+                    st.info("✅ El reporte está vacío. No se encontraron vulnerabilidades o el escaneo no trajo resultados.")
+                    
+            except pd.errors.EmptyDataError:
+                st.warning("⚠️ El archivo de reporte existe pero está vacío. Ejecuta un escaneo.")
+            except Exception as e:
+                st.error(f"❌ Error leyendo reporte CSV: {e}")
+        else:
+            st.info("ℹ️ No hay reporte generado aún. Presiona 'Iniciar Escaneo'.")
 
 # ---------------- PESTAÑA 6: RAW ----------------
 with tab_raw:
