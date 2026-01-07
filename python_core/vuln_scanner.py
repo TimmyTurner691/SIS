@@ -29,12 +29,12 @@ def scan_vulnerabilities():
             with open(INVENTORY_FILE, 'r') as f:
                 devices = json.load(f)
         else:
-            logger.warning("⚠️ No se encontró inventario. Usando lista vacía.")
+            logger.warning("No se encontró inventario. Usando lista vacía.")
     except Exception as e:
-        logger.error(f"❌ Error leyendo inventario: {e}")
+        logger.error(f"Error leyendo inventario: {e}")
         return []
 
-    logger.info(f"🚀 Iniciando escaneo para {len(devices)} dispositivos...")
+    logger.info(f"Iniciando escaneo para {len(devices)} dispositivos...")
 
     # ==============================================================================
     # 🛡️ MODO HARDCORE/DEMO: INYECCIÓN DE VULNERABILIDADES FALSAS PARA LA DEMO
@@ -104,14 +104,14 @@ def scan_vulnerabilities():
                         "score": cvss.get("baseScore", 5.0),
                         "link": f"https://nvd.nist.gov/vuln/detail/{cve.get('id')}"
                     })
-                    logger.info(f"   ✅ Encontrado: {cve.get('id')}")
+                    logger.info(f"  Encontrado: {cve.get('id')}")
                 else:
-                    logger.info("   ℹ️ Sin CVEs reportados.")
+                    logger.info("Sin CVEs reportados.")
             
             time.sleep(2) # Respetar rate limit de NIST
 
         except Exception as e:
-            logger.error(f"   ⚠️ Error de conexión NIST: {e}")
+            logger.error(f"  Error de conexión NIST: {e}")
 
     return report
 
@@ -130,8 +130,8 @@ if __name__ == "__main__":
             if vuln_data:
                 writer.writerows(vuln_data)
         
-        logger.info(f"💾 Reporte guardado en: {REPORT_FILE}")
-        logger.info(f"📊 Total Vulnerabilidades: {len(vuln_data)}")
+        logger.info(f" Reporte guardado en: {REPORT_FILE}")
+        logger.info(f"Total Vulnerabilidades: {len(vuln_data)}")
         
     except Exception as e:
-        logger.error(f"❌ Error escribiendo CSV: {e}")
+        logger.error(f" Error escribiendo CSV: {e}")

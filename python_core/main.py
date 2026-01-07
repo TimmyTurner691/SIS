@@ -11,8 +11,6 @@ from collections import deque
 from elasticsearch import Elasticsearch
 import warnings
 from elasticsearch import ElasticsearchWarning
-
-# IMPORTAMOS TU MÓDULO DE ALERTAS
 from utils_alert import send_email_alert 
 
 # Silenciar warnings
@@ -69,12 +67,6 @@ class MitreICSCorrelator:
             if 'iec104' in proto or dst_port in ['2404', '502', '102', '44818']:
                 detected.append(self.mitre_rules['c2_ot'])
                 
-                # REGLA CUSTOM: Detección de comandos IEC-104 específicos(sin acción por ahora)
-                raw = log_json.get('raw_log', '')
-                if 'iec104' in proto and len(raw) > 0:
-                     # Si quisieramos detectar algo muy específico aquí
-                     pass
-            
             if log_json.get('ai_score', 0) < -0.6: 
                  detected.append(self.mitre_rules['discovery'])
 
@@ -121,16 +113,16 @@ class RiskFusionEngine:
                 # Intentamos leer ignorando errores de formato y limpiando espacios
                 self.cve_db = pd.read_csv(self.cve_path, skipinitialspace=True)
                 
-                # Normalizamos nombres de columnas a minúsculas para evitar errores (IP vs ip)
+                # Normalizamos nombres de columnas a minúsculas para evitar errores
                 self.cve_db.columns = [c.lower().strip() for c in self.cve_db.columns]
                 
-                print(f"✅ CVE Database cargada. Columnas detectadas: {list(self.cve_db.columns)}", flush=True)
+                print(f"CVE Database cargada. Columnas detectadas: {list(self.cve_db.columns)}", flush=True)
                 
                 # Asegurar que la columna ip sea string
                 if 'ip' in self.cve_db.columns:
                     self.cve_db['ip'] = self.cve_db['ip'].astype(str)
                 else:
-                    print("⚠️ ADVERTENCIA: No se encontró la columna 'ip' en cve_report.csv", flush=True)
+                    print("ADVERTENCIA: No se encontró la columna 'ip' en cve_report.csv", flush=True)
                     
             except Exception as e:
                 print(f"⚠️ Error cargando CVEs: {e}", flush=True)
@@ -143,7 +135,7 @@ class RiskFusionEngine:
                     data = json.load(f)
                     for item in data:
                         self.inventory[item.get('ip')] = item.get('criticality', 'LOW')
-                print(f"✅ Inventario Operativo cargado ({len(self.inventory)} activos).", flush=True)
+                print(f"Inventario Operativo cargado ({len(self.inventory)} activos).", flush=True)
             except: pass
 
     def get_score_from_label(self, label):
@@ -159,7 +151,7 @@ class RiskFusionEngine:
         
         # --- FACTOR 1: Importancia Operativa (JSON) ---
         label_ops = self.inventory.get(ip_str, 'UNKNOWN')
-        score_ops = self.get_score_from_label(label_ops)
+        score_importancia_operativa = self.get_score_from_label(label_ops)
         
         # --- FACTOR 2: Vulnerabilidad Técnica (CSV) ---
         score_cve = 1
@@ -178,9 +170,9 @@ class RiskFusionEngine:
                 pass
         
         # --- IMPACTO FINAL ---
-        impacto_final = max(score_ops, score_cve)
+        impacto_final = max(score_importancia_operativa, score_cve)
         
-        return impacto_final, score_ops, score_cve
+        return impacto_final, score_importancia_operativa, score_cve
 
     def evaluar(self, doc, ml_anomaly_score):
         mitre_data = self.mitre.procesar_evento(doc.get('src_ip'), doc)
@@ -281,28 +273,27 @@ def parse_zeek(line, log_type):
 
 # ================= MAIN LOOP =================
 def main():
-    print("🚀 SIS Core: Iniciando Backend...", flush=True)
-    r, es = connect_services()
-    
-    model = IsolationForest(contamination=IA_CONTAMINATION, n_jobs=-1)
-    history = deque(maxlen=IA_WINDOW_SIZE)
-    is_trained = False
+    print("SIS Core: Iniciando Backend...", flush=True)
+    r, es = connect_services() # Conexión a Redis y Elastic
+    model = IsolationForest(contamination=IA_CONTAMINATION, n_jobs=-1) # Modelo IA
+    history = deque(maxlen=IA_WINDOW_SIZE) # Historial para IA
+    is_trained = False # Bandera de entrenamiento IA
 
-    mitre_engine = MitreICSCorrelator()
-    fusion_engine = RiskFusionEngine(mitre_engine)
+    mitre_engine = MitreICSCorrelator() # Motor de correlación MITRE ICS
+    fusion_engine = RiskFusionEngine(mitre_engine) # Motor de fusión de riesgos
 
     # Control de alertas (Anti-Spam de correos)
     # Diccionario: { 'IP_ATACANTE': timestamp_ultima_alerta }
     alert_cooldown = {} 
 
-    file_pointers = {}
-    for k, p in LOG_FILES.items():
+    file_pointers = {} # Punteros de archivos de log
+    for k, p in LOG_FILES.items(): # recorremos los logs para no volver a leer logs antiguos
         if os.path.exists(p):
             file_pointers[k] = os.path.getsize(p)
         else:
             file_pointers[k] = 0
 
-    print(f"👀 Escuchando nuevos eventos...", flush=True)
+    print(f" Escuchando nuevos eventos...", flush=True)
 
     while True:
         time.sleep(1)
@@ -315,7 +306,7 @@ def main():
                 if current_size < file_pointers[key]:
                     file_pointers[key] = 0
                 
-                if current_size > file_pointers[key]:
+                if current_size > file_pointers[key]: 
                     with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                         f.seek(file_pointers[key])
                         lines = f.readlines()
@@ -336,21 +327,21 @@ def main():
                         anomaly_score = 0.5
                         if stats_total > 0:
                             history.append([stats_snort, stats_total])
-                            if len(history) >= 20:
+                            if len(history) >= 20: # Esperamos a tener datos suficientes y entrenar
                                 if not is_trained:
                                     try: model.fit(list(history)); is_trained = True
                                     except: pass
                                 if is_trained:
                                     features = np.array([[stats_snort, stats_total]])
-                                    if model.predict(features)[0] == -1:
-                                        anomaly_score = float(model.decision_function(features)[0])
+                                    if model.predict(features)[0] == -1: #  Anomalía detectada
+                                        anomaly_score = float(model.decision_function(features)[0]) # puntuación de anomalía
                         
                         # --- PROCESAMIENTO Y ALERTAS ---
                         for doc in batch_docs:
-                            doc['ai_score'] = float(anomaly_score)
-                            final_doc, risk = fusion_engine.evaluar(doc, anomaly_score)
-                            
-                            # >>> AQUÍ ESTÁ LA LÓGICA DE ALERTA <<<
+                            doc['ai_score'] = float(anomaly_score) # Añadimos score IA al doc
+                            final_doc, risk = fusion_engine.evaluar(doc, anomaly_score) # Evaluación de riesgo
+
+                            # >>> AQUÍ ESTÁ LA LÓGICA DE ALERTA <<<<
                             if final_doc.get('risk_label') == 'CRÍTICO':
                                 ip_atacante = final_doc.get('src_ip', 'unknown')
                                 now = time.time()

@@ -59,7 +59,7 @@ def get_data(minutes=60, start=None, end=None, limit=5000):
             
         df = pd.DataFrame(hits)
         
-        # --- 🛡️ ZONA DE BLINDAJE (AQUÍ ESTÁ LA CORRECCIÓN) ---
+        # --- ZONA DE BLINDAJE 
         # Lista de columnas que EL DASHBOARD NECESITA SÍ O SÍ para no romperse.
         # Si no vienen de la BD, las creamos vacías.
         cols_blindadas = [
@@ -282,7 +282,7 @@ with tab_ot:
     else:
         st.info("🏭 Esperando tráfico industrial...")
 
-# ---------------- PESTAÑA 5: VULNERABILIDADES (MEJORADA) ----------------
+# ---------------- PESTAÑA 5: VULNERABILIDADES ----------------
 with tab_vuln:
     st.header("🛡️ Gestión de Vulnerabilidades")
     

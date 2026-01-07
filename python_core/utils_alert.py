@@ -6,11 +6,11 @@ from email.mime.multipart import MIMEMultipart
 # --- CONFIGURACIÓN ---
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-SENDER_EMAIL = "segnetsis@gmail.com"  # <--- TU CORREO
-SENDER_PASSWORD = "ects hifw guee udap"               # <--- TU CLAVE DE 16 LETRAS
-RECEIVER_EMAIL = "mvallejos.sa@gmail.com"         # <--- DESTINATARIO
+SENDER_EMAIL = "segnetsis@gmail.com"  
+SENDER_PASSWORD = "ects hifw guee udap"               
+RECEIVER_EMAIL = "mvallejos.sa@gmail.com"         
 
-def send_email_alert(subject, body, level="INFO"):
+def send_email_alert(subject, body, level="INFO"): #función para enviar alertas por correo electrónico
     try:
         msg = MIMEMultipart()
         msg['From'] = SENDER_EMAIL
