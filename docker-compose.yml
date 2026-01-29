@@ -11,7 +11,7 @@ services:
     network_mode: "host"
     privileged: true
     environment:
-      - INTERFACE=any
+      - INTERFACE=lo
     volumes:
       - ./logs/logs_zeek:/pcap
     restart: always
@@ -25,7 +25,7 @@ services:
       - ./logs/logs_snort:/var/log/snort
       - ./config/snort/snort_config/snort.conf:/etc/snort/snort.conf
       - ./config/snort/rules:/etc/snort/rules
-    command: snort -q -i eth0 -c /etc/snort/snort.conf -l /var/log/snort -A fast -k none
+    command: snort -q -i wlp2s0 -c /etc/snort/snort.conf -l /var/log/snort -A fast -k none
     restart: always
 
   # =========================================

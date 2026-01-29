@@ -4,7 +4,7 @@ import time
 import random
 
 # --- CONFIGURA ESTO ---
-IP_DESTINO = "192.168.5.93" # <--- ¡PON LA IP DE TU RTU (SERVER)!
+IP_DESTINO = "192.168.5.103" # <--- ¡PON LA IP DE TU RTU (SERVER)!
 PUERTO = 2404
 # ----------------------
 

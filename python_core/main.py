@@ -11,31 +11,66 @@ from collections import deque
 from elasticsearch import Elasticsearch
 import warnings
 from elasticsearch import ElasticsearchWarning
-from utils_alert import send_email_alert 
 
-# Silenciar warnings
+# Dummy import por si falla
+try:
+    from utils_alert import send_email_alert
+except ImportError:
+    def send_email_alert(subject, body, level):
+        print(f"📧 [EMAIL SIMULADO] {subject}", flush=True)
+
 warnings.filterwarnings("ignore", category=ElasticsearchWarning)
 
 # ================= CONFIGURACIÓN =================
-REDIS_HOST = 'redis'
-ELASTIC_HOST = 'http://elasticsearch:9200'
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+ELASTIC_HOST = os.getenv("ELASTIC_HOST", "elasticsearch")
+REDIS_KEY = "sis_queue"
 INDEX_NAME = 'sis-logs-v1'
-CVE_REPORT_PATH = '/app/cve_report.csv'
-
-LOG_FILES = {
-    'snort': '/var/log/snort/alert',
-    'zeek_conn': '/var/log/zeek/conn.log',
-    'zeek_iec104': '/var/log/zeek/iec104.log'
-}
 
 IA_WINDOW_SIZE = 200
 IA_CONTAMINATION = 0.05
 
-# ================= CLASES DE CORRELACIÓN =================
+# ================= LÓGICA DE TRADUCCIÓN HUMANA (NUEVO) 🏭 =================
+def traducir_iec104(sub_source, raw_log_str):
+    """
+    Convierte nombres de archivos crípticos de Zeek en descripciones para humanos.
+    """
+    sub = sub_source.lower()
+    raw = raw_log_str.upper()
+
+    # 1. COMANDOS (C_ = Control)
+    if 'c_sc' in sub: return "⚙️ Comando Simple (Switch/Breaker)"
+    if 'c_dc' in sub: return "⚙️ Comando Doble (Breaker)"
+    if 'c_rc' in sub: return "⚙️ Comando de Regulación (Set Point)"
+    if 'c_se' in sub: return "⚙️ Comando de Valor (Set Value)"
+    if 'c_ic' in sub: return "❓ Interrogación General (Polling)"
+    
+    # 2. TELEMETRÍA / MONITORIZACIÓN (M_ = Monitor)
+    if 'm_me' in sub: return "📈 Telemetría (Medida Analógica)"
+    if 'm_sp' in sub: return "🚨 Estado (Single Point)"
+    if 'm_dp' in sub: return "🚨 Estado Doble (Double Point)"
+    if 'm_it' in sub: return "🔢 Contador Integrado"
+
+    # 3. GESTIÓN DE CONEXIÓN (APCI U-Format)
+    if 'apci_u' in sub:
+        if 'STARTDT' in raw: return "🔌 Inicio Conexión (STARTDT)"
+        if 'STOPDT'  in raw: return "🔌 Fin Conexión (STOPDT)"
+        if 'TESTFR'  in raw: return "💓 Test de Enlace (Heartbeat)"
+        return "🔌 Gestión de Conexión (U-Format)"
+
+    # 4. CONFIRMACIONES Y SECUENCIA
+    if 'apci_s' in sub: return "🛡️ Confirmación de Trama (ACK)"
+    if 'apci_i' in sub: return "📡 Trama de Datos (I-Format)"
+    
+    # 5. METADATOS
+    if 'asdu' in sub: return "🆔 Cabecera de Datos (ASDU)"
+    
+    return "📦 Tráfico IEC-104 Genérico"
+
+# ================= MOTORES DE INTELIGENCIA =================
 
 class MitreICSCorrelator:
     def __init__(self):
-        self.state_db = {} 
         self.mitre_rules = {
             'discovery': {'id': 'T0846', 'tactic': 'Discovery', 'name': 'Network Scan'},
             'c2_ot':     {'id': 'T0869', 'tactic': 'Command and Control', 'name': 'Standard Protocol (OT)'},
@@ -44,337 +79,203 @@ class MitreICSCorrelator:
             'lateral':   {'id': 'T0866', 'tactic': 'Lateral Movement', 'name': 'Remote Services'}
         }
 
-    def procesar_evento(self, ip_atacante, log_json):
-        if ip_atacante not in self.state_db:
-            self.state_db[ip_atacante] = {'techniques': set(), 'tactics': set()}
-        
-        perfil = self.state_db[ip_atacante]
+    def procesar(self, doc):
         detected = []
+        mitre_info = {"mitre_score": 1, "mitre_msg": "Info", "mitre_tactics": [], "mitre_techniques": []}
 
-        # A. Análisis SNORT
-        if log_json.get('source') == 'snort':
-            msg = log_json.get('message', '').lower()
-            if 'dos' in msg or 'flood' in msg: detected.append(self.mitre_rules['impact'])
-            elif 'exploit' in msg: detected.append(self.mitre_rules['exploit'])
-            else: detected.append(self.mitre_rules['discovery']) 
-        
-        # B. Análisis ZEEK (OT)
-        else:
-            dst_port = str(log_json.get('dst_port', ''))
-            proto = str(log_json.get('protocol', '')).lower()
+        # Detección basada en la traducción humana
+        desc = doc.get('comando_humano', '')
+
+        if doc['source'] == 'snort':
+            msg = doc.get('message', '').lower()
+            if 'dos' in msg: detected.append(self.mitre_rules['impact'])
+            else: detected.append(self.mitre_rules['discovery'])
             
-            # Detectar IEC-104 o Modbus
-            if 'iec104' in proto or dst_port in ['2404', '502', '102', '44818']:
-                detected.append(self.mitre_rules['c2_ot'])
-                
-            if log_json.get('ai_score', 0) < -0.6: 
-                 detected.append(self.mitre_rules['discovery'])
+        elif doc['protocol'] == 'iec104':
+            detected.append(self.mitre_rules['c2_ot'])
+            
+            # Reglas más finas basadas en la traducción
+            if 'Comando' in desc: 
+                # Un comando es potencialmente peligroso si es anomalía
+                pass 
+            if 'Interrogación' in desc and doc.get('ai_score', 0) < -0.6:
+                detected.append(self.mitre_rules['discovery'])
+        
+        # IA Check
+        if doc.get('ai_score', 0) < -0.6:
+             detected.append(self.mitre_rules['discovery'])
+
+        # Scoring
+        tactics = set(); techniques = set()
+        score = 1; msg = "Monitorización Normal"
 
         for rule in detected:
-            perfil['techniques'].add(rule['id'])
-            perfil['tactics'].add(rule['tactic'])
+            tactics.add(rule['tactic']); techniques.add(rule['id'])
 
-        tactics = perfil['tactics']
-        risk = 1
-        msg = "Info"
+        if 'Impact' in tactics: score = 25; msg = "CRÍTICO: Impacto Operativo (T0814)"
+        elif 'Command and Control' in tactics: score = 10; msg = "ALERTA: Tráfico SCADA"
+        elif 'Discovery' in tactics: score = 5; msg = "BAJO: Escaneo"
 
-        if 'Impact' in tactics:
-            risk = 25; msg = "CRÍTICO: Impacto en Proceso (T0814)"
-        elif 'Execution' in tactics or 'Lateral Movement' in tactics:
-            risk = 20; msg = "ALTO: Ejecución / Lateralidad"
-        elif 'Command and Control' in tactics and 'Discovery' in tactics:
-            risk = 18; msg = "ALERTA: Kill Chain Avanzada"
-        elif 'Command and Control' in tactics:
-            risk = 10; msg = "MEDIO: Acceso a Protocolo OT"
-        elif 'Discovery' in tactics:
-            risk = 5; msg = "BAJO: Reconocimiento"
-
-        return {
-            "mitre_score": risk,
-            "mitre_msg": msg,
-            "mitre_tactics": list(tactics),
-            "mitre_techniques": list(perfil['techniques'])
-        }
+        mitre_info['mitre_score'] = score
+        mitre_info['mitre_msg'] = msg
+        mitre_info['mitre_tactics'] = list(tactics)
+        mitre_info['mitre_techniques'] = list(techniques)
+        
+        return mitre_info
 
 class RiskFusionEngine:
-    def __init__(self, mitre_engine):
-        self.mitre = mitre_engine
-        self.cve_db = pd.DataFrame()
-        self.cve_path = '/app/cve_report.csv'
-        self.inventory = {} 
-        self.inventory_path = '/app/ot_inventory.json'
-        
-        self.cargar_datos()
+    def __init__(self):
+        self.mitre = MitreICSCorrelator()
+        self.inventory = {}
+        self.load_inventory()
 
-    def cargar_datos(self):
-        # 1. Cargar CVEs (Técnico)
-        if os.path.exists(self.cve_path):
-            try:
-                # Intentamos leer ignorando errores de formato y limpiando espacios
-                self.cve_db = pd.read_csv(self.cve_path, skipinitialspace=True)
-                
-                # Normalizamos nombres de columnas a minúsculas para evitar errores
-                self.cve_db.columns = [c.lower().strip() for c in self.cve_db.columns]
-                
-                print(f"CVE Database cargada. Columnas detectadas: {list(self.cve_db.columns)}", flush=True)
-                
-                # Asegurar que la columna ip sea string
-                if 'ip' in self.cve_db.columns:
-                    self.cve_db['ip'] = self.cve_db['ip'].astype(str)
-                else:
-                    print("ADVERTENCIA: No se encontró la columna 'ip' en cve_report.csv", flush=True)
-                    
-            except Exception as e:
-                print(f"⚠️ Error cargando CVEs: {e}", flush=True)
-                self.cve_db = pd.DataFrame() # DataFrame vacío por seguridad
+    def load_inventory(self):
+        try:
+            with open('/app/ot_inventory.json', 'r') as f:
+                data = json.load(f)
+                for item in data: self.inventory[item.get('ip')] = item.get('criticality', 'LOW')
+            print(f"✅ Inventario cargado: {len(self.inventory)} activos.", flush=True)
+        except: pass
 
-        # 2. Cargar Inventario (Operativo)
-        if os.path.exists(self.inventory_path):
-            try:
-                with open(self.inventory_path, 'r') as f:
-                    data = json.load(f)
-                    for item in data:
-                        self.inventory[item.get('ip')] = item.get('criticality', 'LOW')
-                print(f"Inventario Operativo cargado ({len(self.inventory)} activos).", flush=True)
-            except: pass
-
-    def get_score_from_label(self, label):
-        label = str(label).upper()
-        if 'CRITICAL' in label: return 5
-        if 'HIGH' in label: return 4
-        if 'MEDIUM' in label: return 3
-        if 'LOW' in label: return 1
-        return 2 
-
-    def calcular_impacto_unificado(self, ip_destino):
-        ip_str = str(ip_destino)
+    def evaluar_riesgo(self, doc, anomaly_score):
+        mitre_data = self.mitre.procesar(doc)
         
-        # --- FACTOR 1: Importancia Operativa (JSON) ---
-        label_ops = self.inventory.get(ip_str, 'UNKNOWN')
-        score_importancia_operativa = self.get_score_from_label(label_ops)
+        dst_ip = doc.get('dst_ip', '0.0.0.0')
+        criticidad = self.inventory.get(dst_ip, 'LOW')
+        impacto = 1
+        if criticidad == 'CRITICAL': impacto = 5
+        elif criticidad == 'HIGH': impacto = 3
         
-        # --- FACTOR 2: Vulnerabilidad Técnica (CSV) ---
-        score_cve = 1
-        
-        # VERIFICACIÓN DE SEGURIDAD 
-        if not self.cve_db.empty and 'ip' in self.cve_db.columns and 'severity' in self.cve_db.columns:
-            try:
-                vulns = self.cve_db[self.cve_db['ip'] == ip_str]
-                if not vulns.empty:
-                    severities = vulns['severity'].apply(self.get_score_from_label)
-                    if not severities.empty:
-                        score_cve = severities.max()
-            except Exception as e:
-                # Si falla algo aquí, solo imprimimos y seguimos con score 1
-                # No detenemos el loop principal
-                pass
-        
-        # --- IMPACTO FINAL ---
-        impacto_final = max(score_importancia_operativa, score_cve)
-        
-        return impacto_final, score_importancia_operativa, score_cve
-
-    def evaluar(self, doc, ml_anomaly_score):
-        mitre_data = self.mitre.procesar_evento(doc.get('src_ip'), doc)
-        
-        ia_risk = 1
-        if ml_anomaly_score < -0.7: ia_risk = 5
-        elif ml_anomaly_score < -0.6: ia_risk = 4
-        
-        mitre_risk = 1
-        m_score = mitre_data['mitre_score']
-        if m_score >= 25: mitre_risk = 5
-        elif m_score >= 18: mitre_risk = 4
-        elif m_score >= 10: mitre_risk = 3
-        
-        probabilidad = max(ia_risk, mitre_risk)
-        
-        # Calculamos impacto de forma segura
-        impacto, score_ops, score_cve = self.calcular_impacto_unificado(doc.get('dst_ip'))
+        probabilidad = max(mitre_data['mitre_score'] // 5, 1)
+        if anomaly_score < -0.7: probabilidad = 5
         
         total_score = probabilidad * impacto
-        
         label = "BAJO"
-        if total_score >= 17: label = "CRÍTICO"
-        elif total_score >= 10: label = "MEDIO"
+        if total_score >= 15: label = "CRÍTICO"
+        elif total_score >= 8: label = "MEDIO"
 
+        doc.update(mitre_data)
         doc.update({
             "risk_total_score": total_score,
             "risk_label": label,
-            "risk_probability": probabilidad,
             "risk_impact": impacto,
-            "impact_details": {
-                "operational_score": int(score_ops),
-                "vulnerability_score": int(score_cve)
-            },
-            "mitre_msg": mitre_data['mitre_msg'],
-            "mitre_tactics": mitre_data['mitre_tactics']
+            "risk_probability": probabilidad
         })
-        return doc, total_score
-    
-# ================= PARSERS INGESTA Y NORMALIZACIÓN =================
-def connect_services():
+        return doc
+
+# ================= NORMALIZACIÓN ROBUSTA =================
+
+def conectar_servicios():
     r = None; es = None
     while not r:
-        try:
-            r = redis.Redis(host=REDIS_HOST, port=6379, db=0, decode_responses=True); r.ping()
-            print("✅ Redis OK", flush=True)
+        try: r = redis.Redis(host=REDIS_HOST, port=6379, db=0, decode_responses=True); r.ping(); print("✅ Redis Listo", flush=True)
         except: time.sleep(2)
     while not es:
-        try:
-            es = Elasticsearch([ELASTIC_HOST]); es.ping()
-            print("✅ Elastic OK", flush=True)
+        try: es = Elasticsearch([f"http://{ELASTIC_HOST}:9200"]); es.ping(); print("✅ Elastic Listo", flush=True)
         except: time.sleep(5)
     return r, es
 
-def parse_snort(line):
+def normalizar_evento(raw_json):
     try:
-        if "[**]" not in line: return None
-        msg_match = re.search(r'\] (.*?) \[', line)
-        msg = msg_match.group(1) if msg_match else "Snort Alert"
-        ips = re.findall(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', line)
-        return {
-            "source": "snort", "event_type": "alert",
-            "message": msg,
-            "src_ip": ips[0] if len(ips)>0 else "0.0.0.0",
-            "dst_ip": ips[1] if len(ips)>1 else "0.0.0.0",
-            "raw_log": line.strip()
-        }
-    except: return None
+        event = json.loads(raw_json)
+        file_path = event.get('log', {}).get('file', {}).get('path', '')
+        message_raw = event.get('message', '{}')
+        
+        zeek_data = {}
+        if isinstance(message_raw, str):
+            try: zeek_data = json.loads(message_raw)
+            except: pass
+        elif isinstance(message_raw, dict): zeek_data = message_raw
 
-def parse_zeek(line, log_type):
-    if not line or line.startswith('#'): return None
-    doc = {}
-    try:
-        data = json.loads(line)
         doc = {
-            "source": "zeek", "sub_source": log_type,
-            "src_ip": data.get('id.orig_h') or data.get('id', {}).get('orig_h', "0.0.0.0"),
-            "dst_ip": data.get('id.resp_h') or data.get('id', {}).get('resp_h', "0.0.0.0"),
-            "dst_port": data.get('id.resp_p') or data.get('id', {}).get('resp_p', 0),
-            "protocol": data.get('proto', 'tcp'),
-            "raw_log": str(data)[:500]
+            "@timestamp": datetime.now().isoformat(),
+            "raw_log": str(message_raw)[:500],
+            "src_ip": "0.0.0.0", "dst_ip": "0.0.0.0", "dst_port": 0,
+            "protocol": "unknown", "source": "unknown",
+            "comando_humano": "N/A" # Nuevo campo para el Dashboard
         }
-        if log_type == 'zeek_iec104' or 'iec104' in line: doc['protocol'] = 'iec104'
+
+        # 1. SNORT
+        if "snort" in file_path or event.get('fields', {}).get('source_type') == 'snort':
+            doc['source'] = 'snort'; doc['protocol'] = 'ids_alert'
+            doc['comando_humano'] = "🚨 Alerta de Intrusión (IDS)"
+            ips = re.findall(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', str(message_raw))
+            if len(ips) >= 1: doc['src_ip'] = ips[0]
+            if len(ips) >= 2: doc['dst_ip'] = ips[1]
+
+        # 2. ZEEK
+        else:
+            doc['source'] = 'zeek'
+            doc['src_ip'] = zeek_data.get('id.orig_h') or zeek_data.get('id', {}).get('orig_h', '0.0.0.0')
+            doc['dst_ip'] = zeek_data.get('id.resp_h') or zeek_data.get('id', {}).get('resp_h', '0.0.0.0')
+            doc['dst_port'] = zeek_data.get('id.resp_p') or zeek_data.get('id', {}).get('resp_p', 0)
+            
+            if "iec104" in file_path:
+                doc['protocol'] = 'iec104'
+                sub_source = os.path.basename(file_path)
+                doc['sub_source'] = sub_source
+                # APLICAMOS LA TRADUCCIÓN AQUÍ
+                doc['comando_humano'] = traducir_iec104(sub_source, str(message_raw))
+                print(f"🏭 {doc['comando_humano']}", flush=True)
+
+            elif "conn.log" in file_path:
+                doc['protocol'] = zeek_data.get('proto', 'tcp')
+                doc['comando_humano'] = f"Conexión {doc['protocol'].upper()}"
+            elif "dns.log" in file_path:
+                doc['protocol'] = 'dns'
+                doc['comando_humano'] = "Resolución DNS"
+            
         return doc
-    except:
-        try:
-            parts = line.split('\t')
-            if len(parts) < 6: return None
-            doc = {
-                "source": "zeek", "sub_source": log_type,
-                "src_ip": parts[2], "dst_ip": parts[4],
-                "dst_port": parts[5], "protocol": parts[6] if len(parts)>6 else "unknown",
-                "raw_log": line[:500]
-            }
-            if log_type == 'zeek_iec104': doc['protocol'] = 'iec104'
-            return doc
-        except: return None
+    except Exception as e: return None
 
 # ================= MAIN LOOP =================
 def main():
-    print("SIS Core: Iniciando Backend...", flush=True)
-    r, es = connect_services() # Conexión a Redis y Elastic
-    model = IsolationForest(contamination=IA_CONTAMINATION, n_jobs=-1) # Modelo IA
-    history = deque(maxlen=IA_WINDOW_SIZE) # Historial para IA
-    is_trained = False # Bandera de entrenamiento IA
+    print("🧠 SIS Core v3.0: Iniciando con Clasificación Fina...", flush=True)
+    r, es = conectar_servicios()
+    engine = RiskFusionEngine()
+    model = IsolationForest(contamination=IA_CONTAMINATION, n_jobs=-1)
+    
+    stats = {'total': 0, 'snort': 0}
+    history = deque(maxlen=IA_WINDOW_SIZE)
+    is_trained = False
+    last_tick = time.time()
 
-    mitre_engine = MitreICSCorrelator() # Motor de correlación MITRE ICS
-    fusion_engine = RiskFusionEngine(mitre_engine) # Motor de fusión de riesgos
-
-    # Control de alertas (Anti-Spam de correos)
-    # Diccionario: { 'IP_ATACANTE': timestamp_ultima_alerta }
-    alert_cooldown = {} 
-
-    file_pointers = {} # Punteros de archivos de log
-    for k, p in LOG_FILES.items(): # recorremos los logs para no volver a leer logs antiguos
-        if os.path.exists(p):
-            file_pointers[k] = os.path.getsize(p)
-        else:
-            file_pointers[k] = 0
-
-    print(f" Escuchando nuevos eventos...", flush=True)
+    print("🚀 Sistema listo y clasificando...", flush=True)
 
     while True:
-        time.sleep(1)
-        
-        for key, path in LOG_FILES.items():
-            if not os.path.exists(path): continue
+        try:
+            item = r.blpop(REDIS_KEY, timeout=1)
             
-            try:
-                current_size = os.path.getsize(path)
-                if current_size < file_pointers[key]:
-                    file_pointers[key] = 0
-                
-                if current_size > file_pointers[key]: 
-                    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                        f.seek(file_pointers[key])
-                        lines = f.readlines()
-                        file_pointers[key] = f.tell()
+            if time.time() - last_tick > 1.0:
+                if stats['total'] > 0:
+                    history.append([stats['snort'], stats['total']])
+                    stats = {'total': 0, 'snort': 0}
+                    if len(history) > 20 and not is_trained:
+                        try: model.fit(list(history)); is_trained = True; print("🤖 IA Entrenada", flush=True)
+                        except: pass
+                last_tick = time.time()
 
-                        batch_docs = []
-                        stats_snort = 0; stats_total = 0
+            if not item: continue
 
-                        for line in lines:
-                            doc = parse_snort(line) if key == 'snort' else parse_zeek(line, key)
-                            if doc:
-                                doc['@timestamp'] = datetime.now().isoformat()
-                                batch_docs.append(doc)
-                                if key == 'snort': stats_snort += 1
-                                stats_total += 1
-                        
-                        # --- IA UPDATE ---
-                        anomaly_score = 0.5
-                        if stats_total > 0:
-                            history.append([stats_snort, stats_total])
-                            if len(history) >= 20: # Esperamos a tener datos suficientes y entrenar
-                                if not is_trained:
-                                    try: model.fit(list(history)); is_trained = True
-                                    except: pass
-                                if is_trained:
-                                    features = np.array([[stats_snort, stats_total]])
-                                    if model.predict(features)[0] == -1: #  Anomalía detectada
-                                        anomaly_score = float(model.decision_function(features)[0]) # puntuación de anomalía
-                        
-                        # --- PROCESAMIENTO Y ALERTAS ---
-                        for doc in batch_docs:
-                            doc['ai_score'] = float(anomaly_score) # Añadimos score IA al doc
-                            final_doc, risk = fusion_engine.evaluar(doc, anomaly_score) # Evaluación de riesgo
+            doc = normalizar_evento(item[1])
+            if not doc: continue
 
-                            # >>> AQUÍ ESTÁ LA LÓGICA DE ALERTA <<<<
-                            if final_doc.get('risk_label') == 'CRÍTICO':
-                                ip_atacante = final_doc.get('src_ip', 'unknown')
-                                now = time.time()
-                                
-                                # Solo enviar correo si pasaron más de 60 seg desde la última alerta para esta IP
-                                last_alert = alert_cooldown.get(ip_atacante, 0)
-                                if (now - last_alert) > 60:
-                                    asunto = f"{final_doc.get('mitre_msg', 'Ataque Detectado')}"
-                                    cuerpo = f"""
-                                    ⚠️ ALERTA DE SEGURIDAD INDUSTRIAL CRÍTICA ⚠️
-                                    
-                                    IP Origen: {ip_atacante}
-                                    IP Destino: {final_doc.get('dst_ip')}
-                                    Protocolo: {final_doc.get('protocol')}
-                                    Riesgo Score: {risk}
-                                    Tácticas MITRE: {final_doc.get('mitre_tactics')}
-                                    Mensaje: {final_doc.get('mitre_msg')}
-                                    
-                                    El sistema ha registrado actividad maliciosa de alto impacto.
-                                    """
-                                    send_email_alert(asunto, cuerpo, level="CRITICAL")
-                                    
-                                    # Actualizar cooldown
-                                    alert_cooldown[ip_atacante] = now
+            ai_score = 0.5
+            if is_trained:
+                try: 
+                    feat = [[1 if doc['source']=='snort' else 0, 1]] 
+                    ai_score = float(model.decision_function(feat)[0])
+                except: pass
+            
+            doc['ai_score'] = ai_score
+            final_doc = engine.evaluar_riesgo(doc, ai_score)
+            es.index(index=INDEX_NAME, document=final_doc)
 
-                            try: es.index(index=INDEX_NAME, document=final_doc)
-                            except Exception as e: print(f"Error ES: {e}", flush=True)
-                            
-                        if batch_docs:
-                             print(f"📦 {key.upper()}: Procesados {len(batch_docs)} eventos.", flush=True)
+            stats['total'] += 1
+            if final_doc['source'] == 'snort': stats['snort'] += 1
 
-            except Exception as e:
-                print(f"⚠️ Error loop principal: {e}", flush=True)
+        except Exception as e:
+            print(f"🔥 Error: {e}", flush=True); time.sleep(1)
 
 if __name__ == "__main__":
     main()

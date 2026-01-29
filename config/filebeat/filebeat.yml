@@ -1,15 +1,36 @@
 filebeat.inputs:
-# 1. Input para ZEEK
+
+# ==========================================
+# 1. INPUT ESPECIAL: TRÁFICO INDUSTRIAL (IEC-104)
+# ==========================================
+# Este bloque busca SOLO los archivos que digan "iec104" en el nombre
+# y les inyecta la etiqueta 'protocol: iec104' para que el Dashboard los vea.
 - type: log
   enabled: true
   paths:
-    - /logs/zeek/current/*.log   # Ojo: Zeek rota logs, 'current' suele ser el activo
+    - /logs/zeek/*iec104*.log  # Atrapa iec104.log, iec104-apci.log, etc.
+  fields:
+    source_type: "zeek"
+    sub_source: "zeek_iec104"
+    protocol: "iec104"       # <--- ¡ESTA ES LA ETIQUETA QUE TE FALTABA!
+  fields_under_root: true
+
+# ==========================================
+# 2. INPUT GENERAL: ZEEK (El resto)
+# ==========================================
+- type: log
+  enabled: true
+  paths:
     - /logs/zeek/*.log
+  # Importante: Excluimos los de arriba para no enviarlos dos veces
+  exclude_files: ['iec104'] 
   fields:
     source_type: "zeek"
   fields_under_root: true
 
-# 2. Input para SNORT
+# ==========================================
+# 3. INPUT PARA SNORT
+# ==========================================
 - type: log
   enabled: true
   paths:
@@ -18,9 +39,11 @@ filebeat.inputs:
     source_type: "snort"
   fields_under_root: true
 
-# --- SALIDA HACIA REDIS (Según tu Diagrama) ---
+# ==========================================
+# 4. SALIDA (NO TOCAR - Mantenemos tu Redis)
+# ==========================================
 output.redis:
   hosts: ["redis:6379"]
-  key: "sis_queue"       # Esta es la 'Key' que Python debe leer
+  key: "sis_queue"
   datatype: "list"
-  bulk_max_size: 1024    # Envía en bloques para no saturar
+  bulk_max_size: 1024
