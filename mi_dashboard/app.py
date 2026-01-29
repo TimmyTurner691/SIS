@@ -7,7 +7,7 @@ import os
 import json
 import subprocess
 import re
-import time  # <--- NUEVO: Necesario para el auto-refresh
+import time
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="SIS - SIEM Dashboard", page_icon="🛡️", layout="wide")
@@ -37,7 +37,16 @@ except:
 # ==========================================
 
 def get_data(minutes=60, start=None, end=None, limit=5000):
-    if not es: return pd.DataFrame()
+    # Definimos las columnas obligatorias ANTES de cualquier cosa
+    cols_blindadas = [
+        'protocol', 'src_port', 'dst_port', 'src_ip', 'dst_ip', 'conn_state',
+        'risk_total_score', 'risk_label', 'mitre_msg', 'source', 'sub_source', 
+        'ai_score', 'raw_log', 'mitre_tactics', 'mitre_techniques',
+        'comando_humano', '@timestamp'
+    ]
+
+    if not es: 
+        return pd.DataFrame(columns=cols_blindadas)
     
     # 1. Construir Query de Tiempo
     if start and end:
@@ -57,18 +66,13 @@ def get_data(minutes=60, start=None, end=None, limit=5000):
         hits = [h['_source'] for h in res['hits']['hits']]
         
         if not hits:
-            return pd.DataFrame()
+            # --- CORRECCIÓN CRÍTICA ---
+            # Si no hay datos, retornamos estructura vacía PERO con columnas
+            return pd.DataFrame(columns=cols_blindadas)
             
         df = pd.DataFrame(hits)
         
         # --- ZONA DE BLINDAJE ---
-        cols_blindadas = [
-            'protocol', 'src_port', 'dst_port', 'src_ip', 'dst_ip', 'conn_state',
-            'risk_total_score', 'risk_label', 'mitre_msg', 'source', 'sub_source', 
-            'ai_score', 'raw_log', 'mitre_tactics', 'mitre_techniques',
-            'comando_humano'
-        ]
-        
         for col in cols_blindadas:
             if col not in df.columns:
                 df[col] = "N/A"
@@ -83,7 +87,7 @@ def get_data(minutes=60, start=None, end=None, limit=5000):
             df['@timestamp'] = df['@timestamp'].dt.tz_localize('UTC')
         df['@timestamp'] = df['@timestamp'].dt.tz_convert('America/Santiago')
         
-        # Limpieza visual
+        # Limpieza visual de listas
         if 'mitre_tactics' in df.columns:
             df['mitre_tactics'] = df['mitre_tactics'].apply(lambda x: ", ".join(x) if isinstance(x, list) else str(x))
         
@@ -91,7 +95,7 @@ def get_data(minutes=60, start=None, end=None, limit=5000):
 
     except Exception as e:
         print(f"Error recuperando datos: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(columns=cols_blindadas)
 
 def lógica_interpretar_scada_fallback(row):
     # Si viene del backend, usarlo
@@ -144,7 +148,7 @@ if modo == "En Vivo":
     
     c_auto, c_sec = st.sidebar.columns([1, 1])
     with c_auto:
-        auto_refresh = st.toggle("Auto-Refresh", value=True) # Por defecto activado
+        auto_refresh = st.toggle("Auto-Refresh", value=True) 
     with c_sec:
         refresh_rate = st.number_input("Segundos", min_value=1, max_value=60, value=2)
 
@@ -152,7 +156,7 @@ if modo == "En Vivo":
         st.cache_data.clear()
 
     # Carga de datos
-    st.cache_data.clear() # Limpiar siempre en modo vivo para ver lo último
+    st.cache_data.clear() 
     df = get_data(minutes=mins)
     
     st.title(f"🛡️ SIS - SIEM Dashboard (En Vivo)")
@@ -174,7 +178,7 @@ tab_risk, tab_snort, tab_net, tab_ot, tab_vuln, tab_raw = st.tabs([
 # ---------------- PESTAÑA 1: RIESGOS ----------------
 with tab_risk:
     if df.empty:
-        st.warning("⚠️ Esperando datos... (Si esto persiste, verifica que Cerebro esté corriendo)")
+        st.warning("⚠️ Esperando datos... (Verifica que el Cerebro esté enviando datos)")
     else:
         k1, k2, k3, k4 = st.columns(4)
         
@@ -258,17 +262,20 @@ with tab_net:
 
 # ---------------- PESTAÑA 4: SCADA ----------------
 with tab_ot:
-    mask_ot = ((df['protocol'] == 'iec104') | (df['dst_port'].astype(str).isin(['2404', '502', '102'])) | (df.get('sub_source') == 'zeek_iec104'))
-    df_ot = df[mask_ot].copy()
+    # --- BLINDAJE EXTRA AQUÍ ---
+    if not df.empty:
+        mask_ot = ((df['protocol'] == 'iec104') | (df['dst_port'].astype(str).isin(['2404', '502', '102'])) | (df.get('sub_source') == 'zeek_iec104'))
+        df_ot = df[mask_ot].copy()
 
-    if not df_ot.empty:
-        df_ot['comando_humano'] = df_ot.apply(lógica_interpretar_scada_fallback, axis=1)
-        df_ot['ia_pct'] = df_ot['ai_score'].apply(lógica_calcular_anomalia_pct)
-        # Mostramos los datos más recientes arriba
-        st.dataframe(df_ot[['@timestamp', 'comando_humano', 'src_ip', 'dst_ip', 'risk_total_score', 'ia_pct']].head(50), 
-                     use_container_width=True, hide_index=True)
+        if not df_ot.empty:
+            df_ot['comando_humano'] = df_ot.apply(lógica_interpretar_scada_fallback, axis=1)
+            df_ot['ia_pct'] = df_ot['ai_score'].apply(lógica_calcular_anomalia_pct)
+            st.dataframe(df_ot[['@timestamp', 'comando_humano', 'src_ip', 'dst_ip', 'risk_total_score', 'ia_pct']].head(50), 
+                         use_container_width=True, hide_index=True)
+        else:
+            st.info("🏭 Esperando tráfico industrial...")
     else:
-        st.info("🏭 Esperando tráfico industrial...")
+        st.info("🏭 Esperando datos...")
 
 # ---------------- PESTAÑA 5: VULNERABILIDADES ----------------
 with tab_vuln:
@@ -341,6 +348,6 @@ with tab_raw:
 if modo == "En Vivo" and auto_refresh:
     time.sleep(refresh_rate)
     try:
-        st.rerun() # Para versiones nuevas de Streamlit
+        st.rerun() 
     except AttributeError:
-        st.experimental_rerun() # Fallback para versiones viejas
+        st.experimental_rerun()

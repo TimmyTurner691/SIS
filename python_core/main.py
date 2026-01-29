@@ -8,67 +8,51 @@ import numpy as np
 from sklearn.ensemble import IsolationForest
 from datetime import datetime
 from collections import deque
-from elasticsearch import Elasticsearch
+from elasticsearch import Elasticsearch, helpers
 import warnings
 from elasticsearch import ElasticsearchWarning
 
-# Dummy import por si falla
+warnings.filterwarnings("ignore", category=ElasticsearchWarning)
+
 try:
     from utils_alert import send_email_alert
 except ImportError:
     def send_email_alert(subject, body, level):
         print(f"📧 [EMAIL SIMULADO] {subject}", flush=True)
 
-warnings.filterwarnings("ignore", category=ElasticsearchWarning)
-
-# ================= CONFIGURACIÓN =================
+# ================= CONFIGURACIÓN NITRO =================
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 ELASTIC_HOST = os.getenv("ELASTIC_HOST", "elasticsearch")
 REDIS_KEY = "sis_queue"
 INDEX_NAME = 'sis-logs-v1'
 
-IA_WINDOW_SIZE = 200
+IA_WINDOW_SIZE = 500
 IA_CONTAMINATION = 0.05
+BATCH_SIZE = 5000       # MODO ASPIRADORA
+FLUSH_INTERVAL = 0.5    
 
-# ================= LÓGICA DE TRADUCCIÓN HUMANA (NUEVO) 🏭 =================
+FLOOD_THRESHOLD = 100 
+
+# ================= LÓGICA DE TRADUCCIÓN =================
 def traducir_iec104(sub_source, raw_log_str):
-    """
-    Convierte nombres de archivos crípticos de Zeek en descripciones para humanos.
-    """
     sub = sub_source.lower()
     raw = raw_log_str.upper()
-
-    # 1. COMANDOS (C_ = Control)
     if 'c_sc' in sub: return "⚙️ Comando Simple (Switch/Breaker)"
     if 'c_dc' in sub: return "⚙️ Comando Doble (Breaker)"
     if 'c_rc' in sub: return "⚙️ Comando de Regulación (Set Point)"
-    if 'c_se' in sub: return "⚙️ Comando de Valor (Set Value)"
     if 'c_ic' in sub: return "❓ Interrogación General (Polling)"
-    
-    # 2. TELEMETRÍA / MONITORIZACIÓN (M_ = Monitor)
     if 'm_me' in sub: return "📈 Telemetría (Medida Analógica)"
-    if 'm_sp' in sub: return "🚨 Estado (Single Point)"
-    if 'm_dp' in sub: return "🚨 Estado Doble (Double Point)"
-    if 'm_it' in sub: return "🔢 Contador Integrado"
-
-    # 3. GESTIÓN DE CONEXIÓN (APCI U-Format)
+    if 'm_sp' in sub: return "📡 Info Punto Simple"
     if 'apci_u' in sub:
-        if 'STARTDT' in raw: return "🔌 Inicio Conexión (STARTDT)"
-        if 'STOPDT'  in raw: return "🔌 Fin Conexión (STOPDT)"
-        if 'TESTFR'  in raw: return "💓 Test de Enlace (Heartbeat)"
-        return "🔌 Gestión de Conexión (U-Format)"
-
-    # 4. CONFIRMACIONES Y SECUENCIA
-    if 'apci_s' in sub: return "🛡️ Confirmación de Trama (ACK)"
-    if 'apci_i' in sub: return "📡 Trama de Datos (I-Format)"
-    
-    # 5. METADATOS
-    if 'asdu' in sub: return "🆔 Cabecera de Datos (ASDU)"
-    
-    return "📦 Tráfico IEC-104 Genérico"
+        if 'STARTDT' in raw: return "🟢 Inicio Conexión (STARTDT)"
+        if 'STOPDT'  in raw: return "🔴 Fin Conexión (STOPDT)"
+        if 'TESTFR'  in raw: return "💓 Latido (Test Frame)"
+        return "🔌 Gestión de Conexión"
+    if 'apci_s' in sub: return "🛡️ Confirmación (ACK)"
+    if 'apci_i' in sub: return "📦 Datos (I-Format)"
+    return "📦 Tráfico Industrial Genérico"
 
 # ================= MOTORES DE INTELIGENCIA =================
-
 class MitreICSCorrelator:
     def __init__(self):
         self.mitre_rules = {
@@ -76,51 +60,45 @@ class MitreICSCorrelator:
             'c2_ot':     {'id': 'T0869', 'tactic': 'Command and Control', 'name': 'Standard Protocol (OT)'},
             'exploit':   {'id': 'T0883', 'tactic': 'Execution', 'name': 'Exploitation'},
             'impact':    {'id': 'T0814', 'tactic': 'Impact', 'name': 'DoS / Process Impact'},
-            'lateral':   {'id': 'T0866', 'tactic': 'Lateral Movement', 'name': 'Remote Services'}
         }
 
-    def procesar(self, doc):
+    def procesar(self, doc, is_flood):
         detected = []
         mitre_info = {"mitre_score": 1, "mitre_msg": "Info", "mitre_tactics": [], "mitre_techniques": []}
 
-        # Detección basada en la traducción humana
-        desc = doc.get('comando_humano', '')
-
-        if doc['source'] == 'snort':
-            msg = doc.get('message', '').lower()
-            if 'dos' in msg: detected.append(self.mitre_rules['impact'])
-            else: detected.append(self.mitre_rules['discovery'])
-            
-        elif doc['protocol'] == 'iec104':
+        if is_flood:
+            detected.append(self.mitre_rules['impact'])
             detected.append(self.mitre_rules['c2_ot'])
+            score = 25
+            msg = "CRÍTICO: Inundación de Red (DoS)"
+        else:
+            desc = doc.get('comando_humano', '')
+            if doc['source'] == 'snort':
+                if 'dos' in doc.get('message', '').lower(): detected.append(self.mitre_rules['impact'])
+                else: detected.append(self.mitre_rules['discovery'])
+            elif doc['protocol'] == 'iec104':
+                detected.append(self.mitre_rules['c2_ot'])
+                if 'Interrogación' in desc and doc.get('ai_score', 0) < -0.35:
+                    detected.append(self.mitre_rules['discovery'])
             
-            # Reglas más finas basadas en la traducción
-            if 'Comando' in desc: 
-                # Un comando es potencialmente peligroso si es anomalía
-                pass 
-            if 'Interrogación' in desc and doc.get('ai_score', 0) < -0.6:
-                detected.append(self.mitre_rules['discovery'])
-        
-        # IA Check
-        if doc.get('ai_score', 0) < -0.6:
-             detected.append(self.mitre_rules['discovery'])
+            if doc.get('ai_score', 0) < -0.35:
+                 detected.append(self.mitre_rules['discovery'])
 
-        # Scoring
+            score = 1; msg = "Monitorización Normal"
+            tactics = set()
+            for rule in detected: tactics.add(rule['tactic'])
+
+            if 'Impact' in tactics: score = 25; msg = "CRÍTICO: Impacto Operativo"
+            elif 'Command and Control' in tactics: score = 10; msg = "ALERTA: Tráfico SCADA"
+            elif 'Discovery' in tactics: score = 5; msg = "BAJO: Escaneo"
+
         tactics = set(); techniques = set()
-        score = 1; msg = "Monitorización Normal"
-
-        for rule in detected:
-            tactics.add(rule['tactic']); techniques.add(rule['id'])
-
-        if 'Impact' in tactics: score = 25; msg = "CRÍTICO: Impacto Operativo (T0814)"
-        elif 'Command and Control' in tactics: score = 10; msg = "ALERTA: Tráfico SCADA"
-        elif 'Discovery' in tactics: score = 5; msg = "BAJO: Escaneo"
+        for rule in detected: tactics.add(rule['tactic']); techniques.add(rule['id'])
 
         mitre_info['mitre_score'] = score
         mitre_info['mitre_msg'] = msg
         mitre_info['mitre_tactics'] = list(tactics)
         mitre_info['mitre_techniques'] = list(techniques)
-        
         return mitre_info
 
 class RiskFusionEngine:
@@ -134,45 +112,58 @@ class RiskFusionEngine:
             with open('/app/ot_inventory.json', 'r') as f:
                 data = json.load(f)
                 for item in data: self.inventory[item.get('ip')] = item.get('criticality', 'LOW')
-            print(f"✅ Inventario cargado: {len(self.inventory)} activos.", flush=True)
         except: pass
 
-    def evaluar_riesgo(self, doc, anomaly_score):
-        mitre_data = self.mitre.procesar(doc)
-        
+    def evaluar_riesgo(self, doc, anomaly_score, is_flood):
+        mitre_data = self.mitre.procesar(doc, is_flood)
         dst_ip = doc.get('dst_ip', '0.0.0.0')
         criticidad = self.inventory.get(dst_ip, 'LOW')
+        
         impacto = 1
         if criticidad == 'CRITICAL': impacto = 5
         elif criticidad == 'HIGH': impacto = 3
         
-        probabilidad = max(mitre_data['mitre_score'] // 5, 1)
-        if anomaly_score < -0.7: probabilidad = 5
+        if is_flood:
+            probabilidad = 5; impacto = 5
+        else:
+            probabilidad = max(mitre_data['mitre_score'] // 5, 1)
+            if anomaly_score < -0.35: probabilidad = 4 
         
         total_score = probabilidad * impacto
+        
         label = "BAJO"
         if total_score >= 15: label = "CRÍTICO"
         elif total_score >= 8: label = "MEDIO"
 
         doc.update(mitre_data)
         doc.update({
-            "risk_total_score": total_score,
-            "risk_label": label,
-            "risk_impact": impacto,
-            "risk_probability": probabilidad
+            "risk_total_score": total_score, "risk_label": label,
+            "risk_impact": impacto, "risk_probability": probabilidad
         })
         return doc
 
-# ================= NORMALIZACIÓN ROBUSTA =================
-
+# ================= HELPER FUNCTIONS =================
 def conectar_servicios():
     r = None; es = None
     while not r:
         try: r = redis.Redis(host=REDIS_HOST, port=6379, db=0, decode_responses=True); r.ping(); print("✅ Redis Listo", flush=True)
         except: time.sleep(2)
+    
+    # --- AQUÍ ESTABA EL ERROR, LO HEMOS CORREGIDO ---
     while not es:
-        try: es = Elasticsearch([f"http://{ELASTIC_HOST}:9200"]); es.ping(); print("✅ Elastic Listo", flush=True)
-        except: time.sleep(5)
+        try: 
+            # Quitamos 'timeout=30' para evitar conflictos de versión
+            es = Elasticsearch([f"http://{ELASTIC_HOST}:9200"])
+            
+            if es.ping():
+                print("✅ Elastic Listo", flush=True)
+            else:
+                print("⚠️ Elastic conectado pero no responde al Ping...", flush=True)
+                es = None
+                time.sleep(5)
+        except Exception as e: 
+            print(f"❌ Error conectando a http://{ELASTIC_HOST}:9200 -> {e}", flush=True)
+            time.sleep(5)
     return r, es
 
 def normalizar_evento(raw_json):
@@ -180,7 +171,6 @@ def normalizar_evento(raw_json):
         event = json.loads(raw_json)
         file_path = event.get('log', {}).get('file', {}).get('path', '')
         message_raw = event.get('message', '{}')
-        
         zeek_data = {}
         if isinstance(message_raw, str):
             try: zeek_data = json.loads(message_raw)
@@ -191,46 +181,29 @@ def normalizar_evento(raw_json):
             "@timestamp": datetime.now().isoformat(),
             "raw_log": str(message_raw)[:500],
             "src_ip": "0.0.0.0", "dst_ip": "0.0.0.0", "dst_port": 0,
-            "protocol": "unknown", "source": "unknown",
-            "comando_humano": "N/A" # Nuevo campo para el Dashboard
+            "protocol": "unknown", "source": "unknown", "comando_humano": "N/A"
         }
 
-        # 1. SNORT
         if "snort" in file_path or event.get('fields', {}).get('source_type') == 'snort':
-            doc['source'] = 'snort'; doc['protocol'] = 'ids_alert'
-            doc['comando_humano'] = "🚨 Alerta de Intrusión (IDS)"
+            doc['source'] = 'snort'; doc['protocol'] = 'ids_alert'; doc['comando_humano'] = "🚨 Alerta IDS"
             ips = re.findall(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', str(message_raw))
             if len(ips) >= 1: doc['src_ip'] = ips[0]
             if len(ips) >= 2: doc['dst_ip'] = ips[1]
-
-        # 2. ZEEK
         else:
             doc['source'] = 'zeek'
             doc['src_ip'] = zeek_data.get('id.orig_h') or zeek_data.get('id', {}).get('orig_h', '0.0.0.0')
             doc['dst_ip'] = zeek_data.get('id.resp_h') or zeek_data.get('id', {}).get('resp_h', '0.0.0.0')
             doc['dst_port'] = zeek_data.get('id.resp_p') or zeek_data.get('id', {}).get('resp_p', 0)
-            
             if "iec104" in file_path:
-                doc['protocol'] = 'iec104'
-                sub_source = os.path.basename(file_path)
-                doc['sub_source'] = sub_source
-                # APLICAMOS LA TRADUCCIÓN AQUÍ
-                doc['comando_humano'] = traducir_iec104(sub_source, str(message_raw))
-                print(f"🏭 {doc['comando_humano']}", flush=True)
-
-            elif "conn.log" in file_path:
-                doc['protocol'] = zeek_data.get('proto', 'tcp')
-                doc['comando_humano'] = f"Conexión {doc['protocol'].upper()}"
-            elif "dns.log" in file_path:
-                doc['protocol'] = 'dns'
-                doc['comando_humano'] = "Resolución DNS"
-            
+                doc['protocol'] = 'iec104'; doc['sub_source'] = os.path.basename(file_path)
+                doc['comando_humano'] = traducir_iec104(doc['sub_source'], str(message_raw))
+            elif "conn.log" in file_path: doc['protocol'] = zeek_data.get('proto', 'tcp')
         return doc
-    except Exception as e: return None
+    except: return None
 
-# ================= MAIN LOOP =================
+# ================= MAIN LOOP NITRO =================
 def main():
-    print("🧠 SIS Core v3.0: Iniciando con Clasificación Fina...", flush=True)
+    print(f"🚀 SIS Core v7.1: NITRO (Fixed Connection)", flush=True)
     r, es = conectar_servicios()
     engine = RiskFusionEngine()
     model = IsolationForest(contamination=IA_CONTAMINATION, n_jobs=-1)
@@ -238,41 +211,79 @@ def main():
     stats = {'total': 0, 'snort': 0}
     history = deque(maxlen=IA_WINDOW_SIZE)
     is_trained = False
-    last_tick = time.time()
+    alert_cooldown = {} 
 
-    print("🚀 Sistema listo y clasificando...", flush=True)
+    metrics_start_time = time.time()
+    metrics_count = 0
+    current_eps = 0.0
 
     while True:
         try:
-            item = r.blpop(REDIS_KEY, timeout=1)
+            batch_raw = []
             
-            if time.time() - last_tick > 1.0:
-                if stats['total'] > 0:
-                    history.append([stats['snort'], stats['total']])
-                    stats = {'total': 0, 'snort': 0}
-                    if len(history) > 20 and not is_trained:
-                        try: model.fit(list(history)); is_trained = True; print("🤖 IA Entrenada", flush=True)
-                        except: pass
-                last_tick = time.time()
+            try:
+                batch_raw = r.lpop(REDIS_KEY, BATCH_SIZE)
+                if not batch_raw: batch_raw = []
+            except:
+                while len(batch_raw) < BATCH_SIZE:
+                    item = r.lpop(REDIS_KEY)
+                    if item: batch_raw.append(item)
+                    else: break
+            
+            if not batch_raw:
+                item_block = r.blpop(REDIS_KEY, timeout=1)
+                if item_block: batch_raw.append(item_block[1])
+                else: continue
 
-            if not item: continue
+            batch_len = len(batch_raw)
+            metrics_count += batch_len
+            elapsed_metrics = time.time() - metrics_start_time
+            
+            if elapsed_metrics >= 1.0:
+                current_eps = metrics_count / elapsed_metrics
+                lag = r.llen(REDIS_KEY)
+                if lag > 1000:
+                    print(f"⚠️ LAG DETECTADO: {lag} en cola. Procesando a {current_eps:.0f} EPS", flush=True)
+                metrics_start_time = time.time()
+                metrics_count = 0
 
-            doc = normalizar_evento(item[1])
-            if not doc: continue
+            IS_FLOOD = True if current_eps > FLOOD_THRESHOLD else False
+
+            stats['total'] += batch_len
+            if len(history) >= 20 and not is_trained:
+                 try: model.fit(list(history)); is_trained = True; print("🤖 IA Entrenada", flush=True)
+                 except: pass
 
             ai_score = 0.5
-            if is_trained:
-                try: 
-                    feat = [[1 if doc['source']=='snort' else 0, 1]] 
-                    ai_score = float(model.decision_function(feat)[0])
+            if IS_FLOOD: ai_score = -1.0
+            elif is_trained:
+                try: ai_score = float(model.decision_function([[stats['snort'], stats['total']]])[0])
                 except: pass
-            
-            doc['ai_score'] = ai_score
-            final_doc = engine.evaluar_riesgo(doc, ai_score)
-            es.index(index=INDEX_NAME, document=final_doc)
 
-            stats['total'] += 1
-            if final_doc['source'] == 'snort': stats['snort'] += 1
+            actions_bulk = []
+            for raw_json in batch_raw:
+                doc = normalizar_evento(raw_json)
+                if not doc: continue
+                
+                final_doc = engine.evaluar_riesgo(doc, ai_score, IS_FLOOD)
+                
+                if final_doc.get('risk_label') == 'CRÍTICO' and not IS_FLOOD:
+                    ip_atacante = final_doc.get('src_ip', 'unknown')
+                    now = time.time()
+                    if (now - alert_cooldown.get(ip_atacante, 0)) > 60:
+                        asunto = f"🚨 {final_doc.get('mitre_msg')}"
+                        cuerpo = f"CRÍTICO Detectado\nEPS: {current_eps:.1f}\nIP: {ip_atacante}"
+                        send_email_alert(asunto, cuerpo, level="CRITICAL")
+                        alert_cooldown[ip_atacante] = now
+
+                actions_bulk.append({"_index": INDEX_NAME, "_source": final_doc})
+                if final_doc['source'] == 'snort': stats['snort'] += 1
+
+            if actions_bulk: helpers.bulk(es, actions_bulk)
+            
+            if not IS_FLOOD or (time.time() % 5 == 0):
+                history.append([stats['snort'], stats['total']])
+            stats = {'total': 0, 'snort': 0}
 
         except Exception as e:
             print(f"🔥 Error: {e}", flush=True); time.sleep(1)

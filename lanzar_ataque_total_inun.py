@@ -4,7 +4,7 @@ import json
 import random
 
 # --- CONFIGURACIÓN ---
-TARGET_IP = "192.168.1.50"
+TARGET_IP = "192.168.5.103"
 ATTACKER_IP = "66.66.66.66"
 LOG_FILE = "logs/logs_snort/alert"
 INVENTORY_FILE = "ot_inventory.json"
