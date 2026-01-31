@@ -34,6 +34,7 @@ FLUSH_INTERVAL = 0.5
 FLOOD_THRESHOLD = 100 
 
 # ================= LÓGICA DE TRADUCCIÓN =================
+# ... (Sin cambios en traducir_iec104) ...
 def traducir_iec104(sub_source, raw_log_str):
     sub = sub_source.lower()
     raw = raw_log_str.upper()
@@ -53,6 +54,7 @@ def traducir_iec104(sub_source, raw_log_str):
     return "📦 Tráfico Industrial Genérico"
 
 # ================= MOTORES DE INTELIGENCIA =================
+# ... (Sin cambios en MitreICSCorrelator y RiskFusionEngine) ...
 class MitreICSCorrelator:
     def __init__(self):
         self.mitre_rules = {
@@ -137,8 +139,11 @@ class RiskFusionEngine:
 
         doc.update(mitre_data)
         doc.update({
-            "risk_total_score": total_score, "risk_label": label,
-            "risk_impact": impacto, "risk_probability": probabilidad
+            "risk_total_score": total_score, 
+            "risk_label": label,
+            "risk_impact": impacto, 
+            "risk_probability": probabilidad,
+            "ai_score": anomaly_score
         })
         return doc
 
@@ -214,11 +219,36 @@ def main():
     metrics_count = 0
     current_eps = 0.0
     
-    # Timer para impresión en consola
     last_print_time = time.time()
 
     while True:
         try:
+            # --- NUEVO: CHECK DE COMANDOS DE CONTROL ---
+            # 1. Comando de Reset Total
+            if r.exists("cmd_reset_brain"):
+                print("♻️ COMANDO RECIBIDO: Borrando memoria y reiniciando IA...", flush=True)
+                
+                # Reiniciar modelo y variables
+                model = IsolationForest(contamination=IA_CONTAMINATION, n_jobs=-1)
+                history = deque(maxlen=IA_WINDOW_SIZE) # Vaciar historial
+                is_trained = False
+                stats = {'total': 0, 'snort': 0}
+                
+                # Borrar comando y cola de flood antiguo
+                r.delete("cmd_reset_brain")
+                r.delete(REDIS_KEY) # Borramos los datos viejos de la cola
+                
+                print("✅ Memoria borrada. Esperando tráfico nuevo...", flush=True)
+                time.sleep(1)
+                continue # Reiniciar loop
+
+            # 2. Comando de Forzar Entrenamiento
+            if r.exists("cmd_force_train"):
+                print("🎓 COMANDO: Forzando re-entrenamiento...", flush=True)
+                is_trained = False 
+                r.delete("cmd_force_train")
+            # ---------------------------------------------
+
             batch_raw = []
             
             try:
@@ -258,8 +288,7 @@ def main():
                 try: ai_score = float(model.decision_function([[stats['snort'], stats['total']]])[0])
                 except: pass
 
-            # --- MONITOR DE CONSOLA (NUEVO) ---
-            # Imprimimos estado cada 2 segundos aprox para no saturar
+            # Monitor de consola (cada 2s)
             if time.time() - last_print_time > 2.0:
                 icon = "🟢"
                 status_msg = "NORMAL"
@@ -271,12 +300,10 @@ def main():
                     icon = "🔥"
                     status_msg = "FLOOD / DOS"
                 
-                # Solo imprimimos si hay tráfico relevante o si hay anomalía
                 if current_eps > 0 or ai_score < 0:
                     print(f"{icon} [IA MONITOR] Score: {ai_score:.3f} | EPS: {current_eps:.0f} | Estado: {status_msg}", flush=True)
                 
                 last_print_time = time.time()
-            # ----------------------------------
 
             actions_bulk = []
             for raw_json in batch_raw:

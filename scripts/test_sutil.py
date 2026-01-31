@@ -4,7 +4,7 @@ import threading
 import sys
 
 # --- CONFIGURACIÓN ---
-TARGET_IP = "10.10.10.10"
+TARGET_IP = "192.168.1.20" # IP del RTU objetivo
 TARGET_PORT = 2404
 
 # Queremos llegar a ~80 EPS en total.

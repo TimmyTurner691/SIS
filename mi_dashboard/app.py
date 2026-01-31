@@ -8,6 +8,7 @@ import json
 import subprocess
 import re
 import time
+import redis  # <--- NUEVO: Necesario para enviar comandos
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="SIS - SIEM Dashboard", page_icon="🛡️", layout="wide")
@@ -26,16 +27,22 @@ INVENTORY_FILE = "/app/ot_inventory.json"
 REPORT_FILE = "/app/cve_report.csv"
 SCANNER_SCRIPT = "/python_core/vuln_scanner.py"
 
-# Conexión a Elasticsearch
+# --- CONEXIONES (ELASTIC Y REDIS) ---
 try: 
     es = Elasticsearch("http://elasticsearch:9200")
 except: 
     es = None
 
+# Conexión a Redis para el Panel de Control
+try:
+    r = redis.Redis(host='redis', port=6379, db=0, decode_responses=True)
+except:
+    r = None
+
 # ==========================================
 # LÓGICA DE NEGOCIO (HELPER FUNCTIONS)
 # ==========================================
-
+# ... (Sin cambios en get_data, lógica_interpretar_scada_fallback, etc.) ...
 def get_data(minutes=60, start=None, end=None, limit=5000):
     # Definimos las columnas obligatorias ANTES de cualquier cosa
     cols_blindadas = [
@@ -66,8 +73,6 @@ def get_data(minutes=60, start=None, end=None, limit=5000):
         hits = [h['_source'] for h in res['hits']['hits']]
         
         if not hits:
-            # --- CORRECCIÓN CRÍTICA ---
-            # Si no hay datos, retornamos estructura vacía PERO con columnas
             return pd.DataFrame(columns=cols_blindadas)
             
         df = pd.DataFrame(hits)
@@ -98,12 +103,9 @@ def get_data(minutes=60, start=None, end=None, limit=5000):
         return pd.DataFrame(columns=cols_blindadas)
 
 def lógica_interpretar_scada_fallback(row):
-    # Si viene del backend, usarlo
     val_backend = str(row.get('comando_humano', 'N/A'))
     if val_backend != "N/A" and val_backend != "nan":
         return val_backend
-
-    # Fallback
     texto_raw = (str(row.get('raw_log', '')) + " " + str(row.get('message', ''))).upper()
     texto = f" {texto_raw} " 
     if 'STARTDT' in texto: return "🟢 Inicio Conexión"
@@ -134,6 +136,33 @@ def lógica_limpiar_snort_msg(row):
 # ==========================================
 
 st.sidebar.title("🎛️ Centro de Comando")
+
+# --- NUEVO: SECCIÓN CONTROL NEURAL ---
+with st.sidebar.expander("🧠 Control IA & Memoria", expanded=True):
+    st.markdown("Gestión del Cerebro:")
+    
+    if st.button("♻️ RESET TOTAL (Borrar Memoria)", type="primary"):
+        if r:
+            try:
+                # 1. Enviar orden al cerebro
+                r.set("cmd_reset_brain", "true")
+                # 2. Borrar la cola de tráfico pendiente (sis_queue)
+                r.delete("sis_queue")
+                st.success("Orden enviada: Memoria borrada y Cola vaciada.")
+                time.sleep(1)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error Redis: {e}")
+        else:
+            st.error("No hay conexión con Redis.")
+
+    if st.button("🎓 Forzar Re-entrenamiento"):
+        if r:
+            r.set("cmd_force_train", "true")
+            st.info("Solicitud enviada.")
+
+# -------------------------------------
+
 modo = st.sidebar.radio("Vista", ["En Vivo", "Histórico"])
 df = pd.DataFrame()
 
@@ -142,7 +171,6 @@ auto_refresh = False
 refresh_rate = 5
 
 if modo == "En Vivo":
-    # --- CONTROLES DE REFRESCO ---
     st.sidebar.markdown("### ⏱️ Control de Tiempo")
     mins = st.sidebar.slider("Ventana de Datos (Min)", 5, 1440, 60)
     
@@ -152,7 +180,7 @@ if modo == "En Vivo":
     with c_sec:
         refresh_rate = st.number_input("Segundos", min_value=1, max_value=60, value=2)
 
-    if st.sidebar.button("🔄 Refrescar Manual", type="primary"):
+    if st.sidebar.button("🔄 Refrescar Manual"):
         st.cache_data.clear()
 
     # Carga de datos
@@ -169,7 +197,7 @@ else:
         df = get_data(start=d1, end=d2)
 
 # ==========================================
-# PESTAÑAS Y VISUALIZACIÓN
+# PESTAÑAS Y VISUALIZACIÓN (Sin cambios abajo)
 # ==========================================
 tab_risk, tab_snort, tab_net, tab_ot, tab_vuln, tab_raw = st.tabs([
     "🚨 Fusión de Riesgos", "🛡️ IDS", "🌐 Red", "🏭 SCADA", "⚠️ Vulnerabilidades", "📝 Logs Raw"
@@ -178,7 +206,7 @@ tab_risk, tab_snort, tab_net, tab_ot, tab_vuln, tab_raw = st.tabs([
 # ---------------- PESTAÑA 1: RIESGOS ----------------
 with tab_risk:
     if df.empty:
-        st.warning("⚠️ Esperando datos... (Verifica que el Cerebro esté enviando datos)")
+        st.warning("⚠️ Esperando datos... (Si acabas de resetear, espera a que llegue tráfico nuevo)")
     else:
         k1, k2, k3, k4 = st.columns(4)
         
@@ -239,7 +267,8 @@ with tab_risk:
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- PESTAÑA 2: SNORT ----------------
+# ... (El resto de las pestañas sigue igual) ...
+# Pestaña Snort
 with tab_snort:
     if not df.empty and 'source' in df.columns:
         df_snort = df[df['source'] == 'snort'].copy()
@@ -250,7 +279,7 @@ with tab_snort:
         else: st.info("✅ No hay alertas de Snort.")
     else: st.info("✅ Sin alertas.")
 
-# ---------------- PESTAÑA 3: RED ----------------
+# Pestaña Red
 with tab_net:
     if not df.empty:
         mask_net = (df['source'] == 'zeek') & (df['protocol'] != 'iec104')
@@ -260,9 +289,8 @@ with tab_net:
                          use_container_width=True, hide_index=True)
         else: st.info("✅ Sin tráfico de red general.")
 
-# ---------------- PESTAÑA 4: SCADA ----------------
+# Pestaña OT
 with tab_ot:
-    # --- BLINDAJE EXTRA AQUÍ ---
     if not df.empty:
         mask_ot = ((df['protocol'] == 'iec104') | (df['dst_port'].astype(str).isin(['2404', '502', '102'])) | (df.get('sub_source') == 'zeek_iec104'))
         df_ot = df[mask_ot].copy()
@@ -277,7 +305,7 @@ with tab_ot:
     else:
         st.info("🏭 Esperando datos...")
 
-# ---------------- PESTAÑA 5: VULNERABILIDADES ----------------
+# Pestaña Vuln
 with tab_vuln:
     st.header("🛡️ Gestión de Vulnerabilidades")
     c1, c2 = st.columns([1, 2])
@@ -337,7 +365,7 @@ with tab_vuln:
             except: st.error("Error leyendo reporte.")
         else: st.info("ℹ️ Sin reportes.")
 
-# ---------------- PESTAÑA 6: RAW ----------------
+# Pestaña Raw
 with tab_raw:
     st.write("Datos crudos:")
     st.dataframe(df, use_container_width=True)
