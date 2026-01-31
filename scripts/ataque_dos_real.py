@@ -7,7 +7,7 @@ import sys
 # --- CONFIGURACIÓN ---
 # Como Zeek está escuchando en 'lo' (Loopback), atacamos al localhost.
 # Esto asegura que el tráfico pase por donde Zeek está mirando.
-TARGET_IP = "192.168.5.103" 
+TARGET_IP = "192.168.5.111" 
 TARGET_PORT = 2404
 HILOS = 200  # Cantidad de atacantes simultáneos (AJUSTA SI TU PC SE CONGELA)
 

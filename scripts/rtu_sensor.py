@@ -5,7 +5,7 @@ import random
 import select 
 
 # --- CONFIGURACIÓN ---
-HOST = '0.0.0.0' 
+HOST = '10.10.10.10' 
 PORT = 2404
 # ---------------------
 

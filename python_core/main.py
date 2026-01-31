@@ -28,7 +28,7 @@ INDEX_NAME = 'sis-logs-v1'
 
 IA_WINDOW_SIZE = 500
 IA_CONTAMINATION = 0.05
-BATCH_SIZE = 5000       # MODO ASPIRADORA
+BATCH_SIZE = 5000       
 FLUSH_INTERVAL = 0.5    
 
 FLOOD_THRESHOLD = 100 
@@ -149,12 +149,9 @@ def conectar_servicios():
         try: r = redis.Redis(host=REDIS_HOST, port=6379, db=0, decode_responses=True); r.ping(); print("✅ Redis Listo", flush=True)
         except: time.sleep(2)
     
-    # --- AQUÍ ESTABA EL ERROR, LO HEMOS CORREGIDO ---
     while not es:
         try: 
-            # Quitamos 'timeout=30' para evitar conflictos de versión
             es = Elasticsearch([f"http://{ELASTIC_HOST}:9200"])
-            
             if es.ping():
                 print("✅ Elastic Listo", flush=True)
             else:
@@ -201,9 +198,9 @@ def normalizar_evento(raw_json):
         return doc
     except: return None
 
-# ================= MAIN LOOP NITRO =================
+# ================= MAIN LOOP CON MONITOR DE CONSOLA =================
 def main():
-    print(f"🚀 SIS Core v7.1: NITRO (Fixed Connection)", flush=True)
+    print(f"🚀 SIS Core v7.2: MONITOR DE CONSOLA ACTIVO", flush=True)
     r, es = conectar_servicios()
     engine = RiskFusionEngine()
     model = IsolationForest(contamination=IA_CONTAMINATION, n_jobs=-1)
@@ -216,6 +213,9 @@ def main():
     metrics_start_time = time.time()
     metrics_count = 0
     current_eps = 0.0
+    
+    # Timer para impresión en consola
+    last_print_time = time.time()
 
     while True:
         try:
@@ -242,8 +242,6 @@ def main():
             if elapsed_metrics >= 1.0:
                 current_eps = metrics_count / elapsed_metrics
                 lag = r.llen(REDIS_KEY)
-                if lag > 1000:
-                    print(f"⚠️ LAG DETECTADO: {lag} en cola. Procesando a {current_eps:.0f} EPS", flush=True)
                 metrics_start_time = time.time()
                 metrics_count = 0
 
@@ -259,6 +257,26 @@ def main():
             elif is_trained:
                 try: ai_score = float(model.decision_function([[stats['snort'], stats['total']]])[0])
                 except: pass
+
+            # --- MONITOR DE CONSOLA (NUEVO) ---
+            # Imprimimos estado cada 2 segundos aprox para no saturar
+            if time.time() - last_print_time > 2.0:
+                icon = "🟢"
+                status_msg = "NORMAL"
+                
+                if ai_score < -0.35: 
+                    icon = "⚠️"
+                    status_msg = "ANOMALÍA SUTIL"
+                if IS_FLOOD: 
+                    icon = "🔥"
+                    status_msg = "FLOOD / DOS"
+                
+                # Solo imprimimos si hay tráfico relevante o si hay anomalía
+                if current_eps > 0 or ai_score < 0:
+                    print(f"{icon} [IA MONITOR] Score: {ai_score:.3f} | EPS: {current_eps:.0f} | Estado: {status_msg}", flush=True)
+                
+                last_print_time = time.time()
+            # ----------------------------------
 
             actions_bulk = []
             for raw_json in batch_raw:
