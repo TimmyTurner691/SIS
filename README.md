@@ -1,0 +1,478 @@
+[README.md](https://github.com/user-attachments/files/25816625/README.md)
+# SIS – MVP de SIEM para Entornos OT/ICS
+
+## Descripción general
+
+**SIS** es un prototipo funcional (MVP) de una plataforma tipo **SIEM** orientada a la **detección, correlación, priorización y visualización de eventos de ciberseguridad** en entornos de red y, especialmente, en escenarios **OT/ICS** (Operational Technology / Industrial Control Systems).
+
+El proyecto combina **captura de tráfico**, **detección por firmas**, **procesamiento y enriquecimiento de eventos**, **almacenamiento histórico** y **visualización web** en una arquitectura basada en contenedores Docker.
+
+A nivel conceptual, el flujo principal es el siguiente:
+
+1. **Zeek** y **Snort** observan el tráfico de red.
+2. **Filebeat** recoge los logs generados y los envía a **Redis**.
+3. El **núcleo Python** consume esos eventos, los normaliza, clasifica, enriquece y calcula riesgo.
+4. Los eventos procesados se almacenan en **Elasticsearch**.
+5. Un **dashboard en Streamlit** permite visualizar eventos en tiempo real e históricos.
+
+---
+
+## Objetivo del proyecto
+
+El objetivo de SIS es demostrar la viabilidad de una solución capaz de:
+
+- detectar eventos de seguridad en red mediante reglas y firmas;
+- interpretar tráfico de interés para entornos industriales;
+- correlacionar y priorizar alertas;
+- incorporar una capa básica de análisis anómalo;
+- entregar visibilidad operativa a través de un dashboard web.
+
+Se trata de un **MVP orientado a demostración y validación técnica**, no de una plataforma SIEM empresarial terminada.
+
+---
+
+## Arquitectura de la solución
+
+### Componentes principales
+
+#### 1. Sensores de red
+
+**Zeek**
+- Captura y analiza tráfico de red.
+- Está preparado para observar tráfico relacionado con **IEC-104** en el puerto **2404**.
+- Genera logs de actividad de red y eventos OT/ICS para su posterior procesamiento.
+
+**Snort**
+- Ejecuta detección basada en firmas.
+- Utiliza reglas locales para generar alertas frente a patrones definidos.
+- Aporta la capa principal de **detección signature-based** del MVP.
+
+#### 2. Transporte de eventos
+
+**Filebeat**
+- Lee los logs generados por Zeek y Snort.
+- Unifica el envío de eventos hacia la cola de procesamiento.
+
+**Redis**
+- Funciona como cola de mensajes/eventos en tiempo real.
+- Permite desacoplar la captura del procesamiento central.
+
+#### 3. Núcleo de análisis
+
+**Python Core (Cerebro)**
+- Consume eventos desde Redis.
+- Normaliza distintos formatos de logs.
+- Identifica origen, IPs, puertos, protocolo y tipo de evento.
+- Traduce ciertos comandos o eventos OT a etiquetas más comprensibles.
+- Aplica lógica de correlación y clasificación.
+- Calcula puntuaciones de riesgo.
+- Puede activar alertas por correo en ciertos escenarios.
+- Almacena los resultados procesados en Elasticsearch.
+
+#### 4. Persistencia histórica
+
+**Elasticsearch**
+- Guarda los eventos enriquecidos y procesados.
+- Permite consultas históricas y análisis desde el dashboard.
+
+#### 5. Capa de visualización
+
+**Dashboard Streamlit**
+- Presenta eventos en tiempo real.
+- Permite revisar históricos.
+- Muestra secciones diferenciadas para IDS, red, SCADA/OT, riesgo y logs crudos.
+- Permite operar funciones auxiliares del sistema desde la interfaz.
+
+---
+
+## Flujo lógico del sistema
+
+### Flujo resumido
+
+```text
+Tráfico de red / eventos simulados
+        ↓
+   Zeek + Snort
+        ↓
+     Filebeat
+        ↓
+       Redis
+        ↓
+   Python Core
+  (normaliza, correlaciona,
+   enriquece y puntúa)
+        ↓
+  Elasticsearch
+        ↓
+ Dashboard Streamlit
+```
+
+### Flujo funcional detallado
+
+1. El sistema observa tráfico o recibe eventos simulados.
+2. Zeek y Snort generan registros y alertas.
+3. Filebeat toma esos archivos de log y los empuja a Redis.
+4. El núcleo Python consume los eventos desde la cola.
+5. Los eventos se transforman a un formato común.
+6. Se identifican patrones relevantes, reglas disparadas y contexto OT.
+7. Se calcula una priorización basada en criticidad y comportamiento observado.
+8. Los resultados se almacenan en Elasticsearch.
+9. El dashboard muestra información en vivo e histórica al operador.
+
+---
+
+## Funcionalidades del MVP
+
+### 1. Detección por firmas
+
+El sistema integra Snort para detectar eventos de red a partir de reglas definidas. Esto permite:
+
+- generar alertas frente a patrones conocidos;
+- demostrar una base de detección tradicional tipo IDS;
+- alimentar el pipeline de priorización y visualización.
+
+### 2. Monitoreo de tráfico OT/ICS
+
+El proyecto está orientado a tráfico industrial, especialmente al protocolo **IEC-104**, lo que permite:
+
+- identificar actividad relevante en puerto 2404;
+- distinguir tráfico OT del tráfico de red general;
+- presentar eventos SCADA/ICS de forma diferenciada.
+
+### 3. Normalización de eventos
+
+El núcleo Python toma eventos provenientes de diferentes fuentes y los transforma en un esquema común. Esto ayuda a:
+
+- correlacionar múltiples orígenes;
+- facilitar búsquedas en Elasticsearch;
+- mostrar datos homogéneos en el dashboard.
+
+### 4. Enriquecimiento de eventos
+
+Los eventos pueden complementarse con información adicional, como:
+
+- tipo de origen;
+- criticidad del activo;
+- interpretación de evento OT;
+- contexto de riesgo.
+
+### 5. Análisis básico de anomalías
+
+Además de la detección por firmas, el proyecto incorpora una capa simple de análisis anómalo orientada a:
+
+- identificar comportamientos fuera de lo esperado;
+- reforzar el valor del MVP más allá del enfoque puramente estático;
+- apoyar el cálculo de riesgo.
+
+### 6. Matriz o fusión de riesgo
+
+Uno de los elementos más interesantes del proyecto es la construcción de una **priorización de alertas** basada en:
+
+- severidad del evento;
+- contexto del activo;
+- comportamiento anómalo;
+- impacto y probabilidad.
+
+Esto permite pasar de “alerta detectada” a “alerta priorizada”, lo que es mucho más útil para operación y toma de decisiones.
+
+### 7. Almacenamiento histórico
+
+Elasticsearch permite:
+
+- conservar eventos procesados;
+- consultar actividad histórica;
+- apoyar análisis posteriores y visualización retrospectiva.
+
+### 8. Dashboard web interactivo
+
+La interfaz desarrollada en Streamlit ofrece:
+
+- vista en tiempo real;
+- vista histórica;
+- paneles separados por tipo de dato;
+- visualización de alertas y eventos;
+- exploración de logs crudos.
+
+### 9. Inventario de activos OT
+
+El proyecto incluye un inventario de activos que puede servir para:
+
+- asignar criticidad a dispositivos;
+- contextualizar eventos;
+- enriquecer la evaluación de riesgo.
+
+### 10. Componente de vulnerabilidades
+
+El MVP incluye una funcionalidad de apoyo para asociar vulnerabilidades o contexto CVE a activos, con foco demostrativo.
+
+### 11. Simulación de ataques o eventos
+
+El repositorio incluye scripts auxiliares orientados a pruebas y demostraciones, útiles para:
+
+- poblar el sistema con eventos de ejemplo;
+- verificar el pipeline extremo a extremo;
+- preparar una presentación o demo funcional.
+
+### 12. Alertas por correo
+
+El núcleo contempla el envío de correos en determinados escenarios críticos, como mecanismo de notificación adicional.
+
+---
+
+## Estructura general del proyecto
+
+Una vista simplificada del repositorio es la siguiente:
+
+```text
+SIS/
+├── config/                # Configuración de Zeek, Snort y Filebeat
+├── logs/                  # Logs generados por sensores
+├── mi_dashboard/          # Dashboard Streamlit
+├── python_core/           # Núcleo de procesamiento y correlación
+├── scripts/               # Scripts auxiliares
+├── snort_core/            # Imagen/base de Snort
+├── docker-compose.yml     # Orquestación principal
+├── ot_inventory.json      # Inventario OT
+├── cve_report.csv         # Reporte o dataset de vulnerabilidades
+├── lanzar_ataque_total.py # Script de simulación/demostración
+└── lanzar_ataque_total_inun.py
+```
+
+---
+
+## Requisitos para ejecutar el proyecto
+
+### Requisitos mínimos
+
+- **Docker** instalado
+- **Docker Compose** habilitado
+- Sistema operativo compatible con Docker
+- Permisos suficientes para levantar contenedores con capacidades de red
+
+### Requisitos recomendados
+
+- Entorno Linux o laboratorio controlado
+- Acceso con privilegios para interfaces de captura
+- Recursos suficientes para ejecutar Elasticsearch con estabilidad
+
+---
+
+## Cómo ejecutar SIS
+
+### 1. Clonar el repositorio
+
+```bash
+git clone https://github.com/TimmyTurner691/SIS.git
+cd SIS
+```
+
+### 2. Levantar los contenedores
+
+```bash
+docker compose up --build
+```
+
+Esto construirá y levantará los servicios definidos en `docker-compose.yml`.
+
+### 3. Verificar que los servicios estén arriba
+
+```bash
+docker ps
+```
+
+Deberían aparecer contenedores equivalentes a:
+
+- Zeek
+- Snort
+- Filebeat
+- Redis
+- Elasticsearch
+- Cerebro (Python Core)
+- Dashboard
+
+### 4. Acceder al dashboard
+
+Una vez iniciado el stack, el dashboard debería quedar disponible en:
+
+```text
+http://localhost:8501
+```
+
+### 5. Verificar Elasticsearch
+
+```text
+http://localhost:9200
+```
+
+### 6. Verificar Redis
+
+Redis quedará expuesto típicamente en:
+
+```text
+localhost:6379
+```
+
+---
+
+## Consideraciones importantes de ejecución
+
+### 1. Proyecto orientado a laboratorio / demo
+
+La configuración del MVP está pensada principalmente para **pruebas, demostración y validación funcional**. No debe considerarse directamente lista para producción sin endurecimiento adicional.
+
+### 2. Captura sobre interfaz local
+
+La configuración actual apunta a una interfaz de captura local, por lo que el comportamiento observado puede estar orientado a tráfico simulado o generado dentro del mismo entorno de prueba.
+
+### 3. Dependencia de logs y volumenes
+
+El correcto funcionamiento depende de que:
+
+- los volúmenes montados existan;
+- las rutas de logs sean válidas;
+- Filebeat pueda leer esos archivos;
+- Redis y Elasticsearch estén disponibles cuando el núcleo Python comience a procesar.
+
+### 4. Inicio completo del stack
+
+Algunos componentes pueden tardar más en quedar listos, especialmente Elasticsearch. Si el dashboard no refleja datos de inmediato, conviene esperar a que todos los servicios terminen de inicializar.
+
+---
+
+## Cómo probar el sistema
+
+### Opción 1: Generar eventos desde scripts incluidos
+
+El repositorio incorpora scripts de simulación, por lo que una forma práctica de probar el pipeline es ejecutarlos una vez que el stack esté arriba.
+
+Ejemplo:
+
+```bash
+python3 lanzar_ataque_total.py
+```
+
+Según el entorno, también puede usarse:
+
+```bash
+python3 lanzar_ataque_total_inun.py
+```
+
+### Opción 2: Revisar logs en tiempo real
+
+Puedes observar actividad de contenedores con:
+
+```bash
+docker compose logs -f
+```
+
+O revisar un servicio puntual:
+
+```bash
+docker compose logs -f dashboard
+docker compose logs -f cerebro
+docker compose logs -f filebeat
+```
+
+### Opción 3: Confirmar ingestión en Elasticsearch
+
+Si el pipeline está funcionando, el índice histórico debería comenzar a poblarse y el dashboard debería reflejar eventos.
+
+---
+
+## Operación básica del dashboard
+
+Dependiendo de la versión exacta del código, el dashboard contempla secciones orientadas a:
+
+- **Riesgo / Fusión de riesgo**
+- **Alertas IDS**
+- **Tráfico de red**
+- **Eventos SCADA / OT**
+- **Vulnerabilidades**
+- **Logs crudos**
+- **Vista en tiempo real**
+- **Vista histórica**
+
+La lógica de la interfaz está diseñada para que un operador pueda revisar eventos priorizados y navegar distintas capas de información desde un solo punto.
+
+---
+
+## Casos de uso que este MVP demuestra
+
+SIS puede presentarse como una demostración técnica de los siguientes casos de uso:
+
+- detección temprana de eventos sospechosos en red;
+- visibilidad sobre tráfico OT/ICS;
+- priorización de alertas en base a criticidad;
+- consolidación de múltiples fuentes en una sola consola;
+- analítica básica sobre comportamiento y riesgo;
+- soporte a pruebas de concepto para monitoreo industrial.
+
+---
+
+## Limitaciones actuales del MVP
+
+Para una presentación seria, conviene explicar estas limitaciones con honestidad técnica. Eso da más credibilidad que vender humo cósmico.
+
+### Limitaciones esperables
+
+- No es un SIEM empresarial completo.
+- La capa de análisis anómalo es básica.
+- La cobertura MITRE/ICS no necesariamente es extensa.
+- La lógica de correlación está orientada a MVP y demostración.
+- La captura y reglas deben ajustarse para cada entorno real.
+- Requiere endurecimiento de seguridad antes de uso productivo.
+- La integración con fuentes externas aún puede ampliarse.
+
+---
+
+## Mejoras futuras sugeridas
+
+Líneas naturales de evolución del proyecto:
+
+- ampliar reglas y cobertura de detección;
+- soportar más protocolos OT/ICS;
+- robustecer la correlación multi-evento;
+- mejorar el modelo de anomalías;
+- incorporar autenticación y control de acceso al dashboard;
+- separar configuración sensible en variables de entorno o secretos;
+- agregar métricas, reportes y exportación ejecutiva;
+- incorporar más fuentes de inteligencia o vulnerabilidades;
+- diseñar despliegue más cercano a producción.
+
+---
+
+## Valor para presentación ante inversionistas
+
+Desde una perspectiva de negocio y producto, SIS demuestra varios elementos atractivos:
+
+- un problema real: visibilidad y detección en entornos OT/ICS;
+- una arquitectura modular y escalable por componentes;
+- integración de detección, analítica y visualización;
+- una propuesta híbrida entre monitoreo industrial y priorización de riesgo;
+- capacidad de evolucionar desde MVP hacia producto especializado.
+
+En términos de pitch, SIS puede posicionarse como una **plataforma de monitoreo y priorización de ciberseguridad para entornos industriales**, con foco en visibilidad operativa, detección temprana y apoyo a la toma de decisiones.
+
+---
+
+## Recomendaciones antes de la presentación
+
+Antes de mostrar el proyecto, conviene:
+
+1. validar que el stack levante desde cero sin intervención manual;
+2. ejecutar un flujo demo reproducible;
+3. limpiar credenciales o datos sensibles del repositorio;
+4. preparar una narrativa clara: problema, solución, arquitectura, demo, roadmap;
+5. mostrar el MVP como base evolutiva, no como producto final cerrado.
+
+---
+
+## Resumen ejecutivo
+
+**SIS** es un MVP de plataforma SIEM/OT que integra captura de tráfico, detección por firmas, procesamiento inteligente, almacenamiento histórico y visualización web en una arquitectura Docker. Su valor principal está en demostrar cómo eventos de ciberseguridad en entornos industriales pueden ser detectados, enriquecidos y priorizados dentro de una sola solución operativa.
+
+---
+
+## Licencia / uso
+
+Se recomienda agregar aquí la licencia del proyecto si se desea formalizar su distribución, reutilización o presentación pública.
