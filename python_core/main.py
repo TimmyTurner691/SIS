@@ -5,6 +5,7 @@ import os
 import re
 import pandas as pd
 import numpy as np
+from pathlib import Path
 from sklearn.ensemble import IsolationForest
 from datetime import datetime
 from collections import deque
@@ -76,8 +77,13 @@ class MitreICSCorrelator:
         else:
             desc = doc.get('comando_humano', '')
             if doc['source'] == 'snort':
-                if 'dos' in doc.get('message', '').lower(): detected.append(self.mitre_rules['impact'])
-                else: detected.append(self.mitre_rules['discovery'])
+                snort_text = f"{doc.get('message', '')} {doc.get('raw_log', '')}".lower()
+
+                if 'dos' in snort_text or 'flood' in snort_text or 'critical flood' in snort_text:
+                    detected.append(self.mitre_rules['impact'])
+                    detected.append(self.mitre_rules['c2_ot'])
+                else:
+                    detected.append(self.mitre_rules['discovery'])
             elif doc['protocol'] == 'iec104':
                 detected.append(self.mitre_rules['c2_ot'])
                 if 'Interrogación' in desc and doc.get('ai_score', 0) < -0.35:
@@ -187,10 +193,16 @@ def normalizar_evento(raw_json):
         }
 
         if "snort" in file_path or event.get('fields', {}).get('source_type') == 'snort':
-            doc['source'] = 'snort'; doc['protocol'] = 'ids_alert'; doc['comando_humano'] = "🚨 Alerta IDS"
+            doc['source'] = 'snort'
+            doc['protocol'] = 'ids_alert'
+            doc['comando_humano'] = "🚨 Alerta IDS"
+            doc['message'] = str(message_raw)
+
             ips = re.findall(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', str(message_raw))
-            if len(ips) >= 1: doc['src_ip'] = ips[0]
-            if len(ips) >= 2: doc['dst_ip'] = ips[1]
+            if len(ips) >= 1:
+                doc['src_ip'] = ips[0]
+            if len(ips) >= 2:
+                doc['dst_ip'] = ips[1]
         else:
             doc['source'] = 'zeek'
             doc['src_ip'] = zeek_data.get('id.orig_h') or zeek_data.get('id', {}).get('orig_h', '0.0.0.0')
@@ -203,51 +215,173 @@ def normalizar_evento(raw_json):
         return doc
     except: return None
 
+def reset_brain_state():
+    model = IsolationForest(contamination=IA_CONTAMINATION, n_jobs=-1)
+    stats = {'total': 0, 'snort': 0}
+    history = deque(maxlen=IA_WINDOW_SIZE)
+    is_trained = False
+    alert_cooldown = {}
+    metrics_start_time = time.time()
+    metrics_count = 0
+    current_eps = 0.0
+    last_print_time = time.time()
+
+    return {
+        "model": model,
+        "stats": stats,
+        "history": history,
+        "is_trained": is_trained,
+        "alert_cooldown": alert_cooldown,
+        "metrics_start_time": metrics_start_time,
+        "metrics_count": metrics_count,
+        "current_eps": current_eps,
+        "last_print_time": last_print_time,
+    }
+
+
+def wipe_elasticsearch_index(es):
+    try:
+        if es.indices.exists(index=INDEX_NAME):
+            es.indices.delete(index=INDEX_NAME)
+            print(f"🗑️ Índice eliminado: {INDEX_NAME}", flush=True)
+
+        es.indices.create(index=INDEX_NAME, ignore=400)
+        print(f"✅ Índice recreado: {INDEX_NAME}", flush=True)
+    except Exception as e:
+        print(f"⚠️ Error reiniciando Elasticsearch: {e}", flush=True)
+
+
+def clear_source_logs():
+    log_paths = [
+        "/logs/snort/alert",
+    ]
+
+    for file_path in log_paths:
+        try:
+            p = Path(file_path)
+            if p.exists():
+                p.write_text("")
+                print(f"🧹 Log limpiado: {file_path}", flush=True)
+        except Exception as e:
+            print(f"⚠️ No se pudo limpiar {file_path}: {e}", flush=True)
+
+    zeek_dirs = [
+        "/logs/zeek",
+        "/pcap/logs/live",
+        "/pcap/logs",
+    ]
+
+    for zeek_dir in zeek_dirs:
+        try:
+            p = Path(zeek_dir)
+            if p.exists() and p.is_dir():
+                for f in p.glob("*.log"):
+                    try:
+                        f.write_text("")
+                        print(f"🧹 Log Zeek limpiado: {f}", flush=True)
+                    except Exception as inner_e:
+                        print(f"⚠️ No se pudo limpiar {f}: {inner_e}", flush=True)
+        except Exception as e:
+            print(f"⚠️ Error revisando directorio {zeek_dir}: {e}", flush=True)
+
+
+def full_reset_demo(es, r, engine):
+    print("🧹 COMANDO RECIBIDO: Ejecutando RESET DEMO TOTAL...", flush=True)
+
+    # 1. Borrar cola Redis
+    try:
+        r.delete(REDIS_KEY)
+        print("✅ Cola Redis vaciada.", flush=True)
+    except Exception as e:
+        print(f"⚠️ Error vaciando Redis: {e}", flush=True)
+
+    # 2. Reiniciar índice Elasticsearch
+    wipe_elasticsearch_index(es)
+
+    # 3. Limpiar logs fuente
+    clear_source_logs()
+
+    # 4. Recargar inventario por si hubo cambios
+    try:
+        engine.load_inventory()
+    except Exception as e:
+        print(f"⚠️ Error recargando inventario: {e}", flush=True)
+
+    print("✅ RESET DEMO TOTAL completado.", flush=True)
+
+    # 5. Devolver estado limpio para la IA
+    return reset_brain_state()
+
 # ================= MAIN LOOP CON MONITOR DE CONSOLA =================
 def main():
     print(f"🚀 SIS Core v7.2: MONITOR DE CONSOLA ACTIVO", flush=True)
     r, es = conectar_servicios()
     engine = RiskFusionEngine()
-    model = IsolationForest(contamination=IA_CONTAMINATION, n_jobs=-1)
-    
-    stats = {'total': 0, 'snort': 0}
-    history = deque(maxlen=IA_WINDOW_SIZE)
-    is_trained = False
-    alert_cooldown = {} 
 
-    metrics_start_time = time.time()
-    metrics_count = 0
-    current_eps = 0.0
-    
-    last_print_time = time.time()
+    state = reset_brain_state()
+    model = state["model"]
+    stats = state["stats"]
+    history = state["history"]
+    is_trained = state["is_trained"]
+    alert_cooldown = state["alert_cooldown"]
+    metrics_start_time = state["metrics_start_time"]
+    metrics_count = state["metrics_count"]
+    current_eps = state["current_eps"]
+    last_print_time = state["last_print_time"]
 
     while True:
         try:
             # --- NUEVO: CHECK DE COMANDOS DE CONTROL ---
-            # 1. Comando de Reset Total
-            if r.exists("cmd_reset_brain"):
-                print("♻️ COMANDO RECIBIDO: Borrando memoria y reiniciando IA...", flush=True)
-                
-                # Reiniciar modelo y variables
-                model = IsolationForest(contamination=IA_CONTAMINATION, n_jobs=-1)
-                history = deque(maxlen=IA_WINDOW_SIZE) # Vaciar historial
-                is_trained = False
-                stats = {'total': 0, 'snort': 0}
-                
-                # Borrar comando y cola de flood antiguo
-                r.delete("cmd_reset_brain")
-                r.delete(REDIS_KEY) # Borramos los datos viejos de la cola
-                
-                print("✅ Memoria borrada. Esperando tráfico nuevo...", flush=True)
-                time.sleep(1)
-                continue # Reiniciar loop
 
-            # 2. Comando de Forzar Entrenamiento
+            # 1. Reset IA
+            if r.exists("cmd_reset_brain"):
+                print("♻️ COMANDO RECIBIDO: Borrando memoria IA...", flush=True)
+
+                state = reset_brain_state()
+                model = state["model"]
+                stats = state["stats"]
+                history = state["history"]
+                is_trained = state["is_trained"]
+                alert_cooldown = state["alert_cooldown"]
+                metrics_start_time = state["metrics_start_time"]
+                metrics_count = state["metrics_count"]
+                current_eps = state["current_eps"]
+                last_print_time = state["last_print_time"]
+
+                r.delete("cmd_reset_brain")
+                r.delete(REDIS_KEY)
+
+                print("✅ Memoria IA borrada. Esperando tráfico nuevo...", flush=True)
+                time.sleep(1)
+                continue
+
+            # 2. Reset Demo Total
+            if r.exists("cmd_full_reset_demo"):
+                state = full_reset_demo(es, r, engine)
+
+                model = state["model"]
+                stats = state["stats"]
+                history = state["history"]
+                is_trained = state["is_trained"]
+                alert_cooldown = state["alert_cooldown"]
+                metrics_start_time = state["metrics_start_time"]
+                metrics_count = state["metrics_count"]
+                current_eps = state["current_eps"]
+                last_print_time = state["last_print_time"]
+
+                r.delete("cmd_full_reset_demo")
+
+                print("✅ Sistema reiniciado para demo. Estado limpio.", flush=True)
+                time.sleep(2)
+                continue
+
+            # 3. Forzar re-entrenamiento
             if r.exists("cmd_force_train"):
                 print("🎓 COMANDO: Forzando re-entrenamiento...", flush=True)
-                is_trained = False 
+                is_trained = False
                 r.delete("cmd_force_train")
-            # ---------------------------------------------
+
+            # ------------------------------------
 
             batch_raw = []
             

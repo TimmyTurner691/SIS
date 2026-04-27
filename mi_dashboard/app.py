@@ -140,15 +140,26 @@ st.sidebar.title("🎛️ Centro de Comando")
 # --- NUEVO: SECCIÓN CONTROL NEURAL ---
 with st.sidebar.expander("🧠 Control IA & Memoria", expanded=True):
     st.markdown("Gestión del Cerebro:")
-    
-    if st.button("♻️ RESET TOTAL (Borrar Memoria)", type="primary"):
+
+    if st.button("♻️ RESET IA", type="secondary"):
         if r:
             try:
-                # 1. Enviar orden al cerebro
                 r.set("cmd_reset_brain", "true")
-                # 2. Borrar la cola de tráfico pendiente (sis_queue)
                 r.delete("sis_queue")
-                st.success("Orden enviada: Memoria borrada y Cola vaciada.")
+                st.success("Orden enviada: memoria IA y cola vaciadas.")
+                time.sleep(1)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error Redis: {e}")
+        else:
+            st.error("No hay conexión con Redis.")
+
+    if st.button("🧹 RESET DEMO TOTAL", type="primary"):
+        if r:
+            try:
+                r.set("cmd_full_reset_demo", "true")
+                r.delete("sis_queue")
+                st.success("Orden enviada: reinicio total de demo solicitado.")
                 time.sleep(1)
                 st.rerun()
             except Exception as e:
@@ -158,8 +169,13 @@ with st.sidebar.expander("🧠 Control IA & Memoria", expanded=True):
 
     if st.button("🎓 Forzar Re-entrenamiento"):
         if r:
-            r.set("cmd_force_train", "true")
-            st.info("Solicitud enviada.")
+            try:
+                r.set("cmd_force_train", "true")
+                st.info("Solicitud enviada.")
+            except Exception as e:
+                st.error(f"Error Redis: {e}")
+        else:
+            st.error("No hay conexión con Redis.")
 
 # -------------------------------------
 
@@ -263,7 +279,7 @@ with tab_risk:
             if not df.empty and 'risk_impact' in df.columns and 'risk_probability' in df.columns:
                 fig = px.density_heatmap(
                     df, x="risk_impact", y="risk_probability", nbinsx=5, nbinsy=5, 
-                    title="Amenaza (Y) vs Impacto (X)", range_x=[0.5, 5.5], range_y=[0.5, 5.5], color_continuous_scale="Reds"
+                    title="Probabilidad (Y) vs Impacto (X)", range_x=[0.5, 5.5], range_y=[0.5, 5.5], color_continuous_scale="Reds"
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
