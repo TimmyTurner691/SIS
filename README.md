@@ -260,6 +260,11 @@ SIS/
 
 ## Cómo ejecutar SIS
 
+## Guía de instalación en servidor Linux
+
+Para despliegue en servidor con acceso remoto LAN y modo proxy opcional, revisa: `docs/INSTALL_SERVER_LINUX.md`.
+
+
 ### 1. Clonar el repositorio
 
 ```bash
@@ -281,6 +286,14 @@ docker compose up --build
 ```
 
 Esto construirá y levantará los servicios definidos en `docker-compose.yml`.
+
+> Acceso remoto LAN (modo simple): `http://IP_SERVIDOR:${SIS_DASHBOARD_PORT}`.
+>
+> Modo proxy opcional (Nginx):
+> ```bash
+> docker compose --profile proxy up -d --build
+> ```
+> Acceso: `http://IP_SERVIDOR:${SIS_PROXY_PORT}`.
 
 ### 4. Verificar que los servicios estén arriba
 
