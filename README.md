@@ -225,12 +225,13 @@ Una vista simplificada del repositorio es la siguiente:
 
 ```text
 SIS/
-├── config/                # Configuración de Zeek, Snort y Filebeat
+├── sensores/              # Sensores (Zeek + Snort)
+├── core/                  # Núcleo de análisis (Cerebro)
+├── dashboard/             # Dashboard Streamlit
+├── reglas_firmas/         # Reglas IDS / firmas
+├── configuracion/         # Configuración de Filebeat/Snort
+├── scripts_demo/          # Scripts de simulación y demo
 ├── logs/                  # Logs generados por sensores
-├── mi_dashboard/          # Dashboard Streamlit
-├── python_core/           # Núcleo de procesamiento y correlación
-├── scripts/               # Scripts auxiliares
-├── snort_core/            # Imagen/base de Snort
 ├── docker-compose.yml     # Orquestación principal
 ├── ot_inventory.json      # Inventario OT
 ├── cve_report.csv         # Reporte o dataset de vulnerabilidades
@@ -266,7 +267,14 @@ git clone https://github.com/TimmyTurner691/SIS.git
 cd SIS
 ```
 
-### 2. Levantar los contenedores
+### 2. Configurar variables de entorno
+
+```bash
+cp .env.example .env
+# Edita .env según tu entorno
+```
+
+### 3. Levantar los contenedores
 
 ```bash
 docker compose up --build
@@ -274,7 +282,7 @@ docker compose up --build
 
 Esto construirá y levantará los servicios definidos en `docker-compose.yml`.
 
-### 3. Verificar que los servicios estén arriba
+### 4. Verificar que los servicios estén arriba
 
 ```bash
 docker ps
@@ -290,7 +298,7 @@ Deberían aparecer contenedores equivalentes a:
 - Cerebro (Python Core)
 - Dashboard
 
-### 4. Acceder al dashboard
+### 5. Acceder al dashboard
 
 Una vez iniciado el stack, el dashboard debería quedar disponible en:
 
@@ -298,13 +306,13 @@ Una vez iniciado el stack, el dashboard debería quedar disponible en:
 http://localhost:8501
 ```
 
-### 5. Verificar Elasticsearch
+### 6. Verificar Elasticsearch
 
 ```text
 http://localhost:9200
 ```
 
-### 6. Verificar Redis
+### 7. Verificar Redis
 
 Redis quedará expuesto típicamente en:
 
@@ -372,6 +380,13 @@ docker compose logs -f dashboard
 docker compose logs -f cerebro
 docker compose logs -f filebeat
 ```
+
+## Configuración y secretos
+
+- Todas las variables de entorno del stack están documentadas en `.env.example`.
+- **No** se incluyen credenciales SMTP en el repositorio.
+- Para habilitar alertas por correo, define en `.env`: `SIS_SMTP_SERVER`, `SIS_SMTP_PORT`, `SIS_SMTP_SENDER_EMAIL`, `SIS_SMTP_SENDER_PASSWORD`, `SIS_SMTP_RECEIVER_EMAIL`.
+- Si esos valores quedan vacíos, el core omite el envío de correos sin fallar.
 
 ### Opción 3: Confirmar ingestión en Elasticsearch
 

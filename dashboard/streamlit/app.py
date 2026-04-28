@@ -25,20 +25,25 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-INVENTORY_FILE = "/app/ot_inventory.json"
-REPORT_FILE = "/app/cve_report.csv"
-SCANNER_SCRIPT = "/python_core/vuln_scanner.py"
+INVENTORY_FILE = os.getenv("SIS_DASHBOARD_INVENTORY_PATH", "/app/ot_inventory.json")
+REPORT_FILE = os.getenv("SIS_DASHBOARD_REPORT_PATH", "/app/cve_report.csv")
+SCANNER_SCRIPT = os.getenv("SIS_DASHBOARD_SCANNER_SCRIPT", "/python_core/vuln_scanner.py")
+ES_HOST = os.getenv("SIS_DASHBOARD_ELASTIC_HOST", "elasticsearch")
+ES_PORT = os.getenv("SIS_DASHBOARD_ELASTIC_PORT", "9200")
+REDIS_HOST = os.getenv("SIS_DASHBOARD_REDIS_HOST", "redis")
+REDIS_PORT = int(os.getenv("SIS_DASHBOARD_REDIS_PORT", "6379"))
+INDEX_NAME = os.getenv("SIS_DASHBOARD_INDEX", "sis-logs-v1")
 
 # --- CONEXIONES (ELASTIC Y REDIS) ---
-try: 
-    es = Elasticsearch("http://elasticsearch:9200")
-except: 
+try:
+    es = Elasticsearch(f"http://{ES_HOST}:{ES_PORT}")
+except Exception:
     es = None
 
 # Conexión a Redis para el Panel de Control
 try:
-    r = redis.Redis(host='redis', port=6379, db=0, decode_responses=True)
-except:
+    r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
+except Exception:
     r = None
 
 # ==========================================
@@ -72,7 +77,7 @@ def get_data(minutes=60, start=None, end=None, limit=5000):
     }
 
     try:
-        res = es.search(index="sis-logs-v1", body=query)
+        res = es.search(index=INDEX_NAME, body=query)
         hits = [h['_source'] for h in res['hits']['hits']]
         
         if not hits:
