@@ -23,9 +23,12 @@ except ImportError:
 
 # ================= CONFIGURACIÓN NITRO =================
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 ELASTIC_HOST = os.getenv("ELASTIC_HOST", "elasticsearch")
-REDIS_KEY = "sis_queue"
-INDEX_NAME = 'sis-logs-v1'
+ELASTIC_PORT = int(os.getenv("ELASTIC_PORT", "9200"))
+REDIS_KEY = os.getenv("REDIS_KEY", "sis_queue")
+INDEX_NAME = os.getenv("SIS_INDEX_NAME", "sis-logs-v1")
+INVENTORY_FILE = os.getenv("SIS_INVENTORY_PATH", "/app/ot_inventory.json")
 
 IA_WINDOW_SIZE = 500
 IA_CONTAMINATION = 0.05
@@ -117,7 +120,7 @@ class RiskFusionEngine:
 
     def load_inventory(self):
         try:
-            with open('/app/ot_inventory.json', 'r') as f:
+            with open(INVENTORY_FILE, 'r') as f:
                 data = json.load(f)
                 for item in data: self.inventory[item.get('ip')] = item.get('criticality', 'LOW')
         except: pass
@@ -157,12 +160,12 @@ class RiskFusionEngine:
 def conectar_servicios():
     r = None; es = None
     while not r:
-        try: r = redis.Redis(host=REDIS_HOST, port=6379, db=0, decode_responses=True); r.ping(); print("✅ Redis Listo", flush=True)
+        try: r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True); r.ping(); print("✅ Redis Listo", flush=True)
         except: time.sleep(2)
     
     while not es:
         try: 
-            es = Elasticsearch([f"http://{ELASTIC_HOST}:9200"])
+            es = Elasticsearch([f"http://{ELASTIC_HOST}:{ELASTIC_PORT}"])
             if es.ping():
                 print("✅ Elastic Listo", flush=True)
             else:
@@ -170,7 +173,7 @@ def conectar_servicios():
                 es = None
                 time.sleep(5)
         except Exception as e: 
-            print(f"❌ Error conectando a http://{ELASTIC_HOST}:9200 -> {e}", flush=True)
+            print(f"❌ Error conectando a http://{ELASTIC_HOST}:{ELASTIC_PORT} -> {e}", flush=True)
             time.sleep(5)
     return r, es
 

@@ -1,0 +1,7 @@
+streamlit
+redis
+pandas
+elasticsearch
+plotly
+requests
+numpy
