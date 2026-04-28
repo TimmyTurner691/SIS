@@ -43,7 +43,7 @@ filebeat.inputs:
 # 4. SALIDA (NO TOCAR - Mantenemos tu Redis)
 # ==========================================
 output.redis:
-  hosts: ["redis:6379"]
-  key: "sis_queue"
+  hosts: ["${REDIS_HOST:redis}:${REDIS_PORT:6379}"]
+  key: "${SIS_REDIS_KEY:sis_queue}"
   datatype: "list"
   bulk_max_size: 1024

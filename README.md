@@ -225,12 +225,13 @@ Una vista simplificada del repositorio es la siguiente:
 
 ```text
 SIS/
-├── config/                # Configuración de Zeek, Snort y Filebeat
+├── sensores/              # Sensores (Zeek + Snort)
+├── core/                  # Núcleo de análisis (Cerebro)
+├── dashboard/             # Dashboard Streamlit
+├── reglas_firmas/         # Reglas IDS / firmas
+├── configuracion/         # Configuración de Filebeat/Snort
+├── scripts_demo/          # Scripts de simulación y demo
 ├── logs/                  # Logs generados por sensores
-├── mi_dashboard/          # Dashboard Streamlit
-├── python_core/           # Núcleo de procesamiento y correlación
-├── scripts/               # Scripts auxiliares
-├── snort_core/            # Imagen/base de Snort
 ├── docker-compose.yml     # Orquestación principal
 ├── ot_inventory.json      # Inventario OT
 ├── cve_report.csv         # Reporte o dataset de vulnerabilidades
@@ -259,6 +260,13 @@ SIS/
 
 ## Cómo ejecutar SIS
 
+## Guía de instalación en servidor Linux
+
+Para despliegue en servidor con acceso remoto LAN y modo proxy opcional, revisa: `docs/INSTALL_SERVER_LINUX.md`.
+
+Para captura real desde interfaz física/puerto espejo (SPAN), revisa: `docs/SPAN_DEPLOYMENT.md`.
+
+
 ### 1. Clonar el repositorio
 
 ```bash
@@ -266,7 +274,14 @@ git clone https://github.com/TimmyTurner691/SIS.git
 cd SIS
 ```
 
-### 2. Levantar los contenedores
+### 2. Configurar variables de entorno
+
+```bash
+cp .env.sis .env
+# Edita .env según tu entorno
+```
+
+### 3. Levantar los contenedores
 
 ```bash
 docker compose up --build
@@ -274,7 +289,15 @@ docker compose up --build
 
 Esto construirá y levantará los servicios definidos en `docker-compose.yml`.
 
-### 3. Verificar que los servicios estén arriba
+> Acceso remoto LAN (modo simple): `http://IP_SERVIDOR:${SIS_DASHBOARD_PORT}`.
+>
+> Modo proxy opcional (Nginx):
+> ```bash
+> docker compose --profile proxy up -d --build
+> ```
+> Acceso: `http://IP_SERVIDOR:${SIS_PROXY_PORT}`.
+
+### 4. Verificar que los servicios estén arriba
 
 ```bash
 docker ps
@@ -290,7 +313,7 @@ Deberían aparecer contenedores equivalentes a:
 - Cerebro (Python Core)
 - Dashboard
 
-### 4. Acceder al dashboard
+### 5. Acceder al dashboard
 
 Una vez iniciado el stack, el dashboard debería quedar disponible en:
 
@@ -298,13 +321,13 @@ Una vez iniciado el stack, el dashboard debería quedar disponible en:
 http://localhost:8501
 ```
 
-### 5. Verificar Elasticsearch
+### 6. Verificar Elasticsearch
 
 ```text
 http://localhost:9200
 ```
 
-### 6. Verificar Redis
+### 7. Verificar Redis
 
 Redis quedará expuesto típicamente en:
 
@@ -323,6 +346,13 @@ La configuración del MVP está pensada principalmente para **pruebas, demostrac
 ### 2. Captura sobre interfaz local
 
 La configuración actual apunta a una interfaz de captura local, por lo que el comportamiento observado puede estar orientado a tráfico simulado o generado dentro del mismo entorno de prueba.
+
+### 3. Interfaz de gestión vs captura
+
+En despliegue real se recomienda separar:
+
+- **Interfaz de gestión** (`SIS_MANAGEMENT_INTERFACE` / `SIS_MANAGEMENT_BIND_IP`) para acceso GUI/SSH.
+- **Interfaz de captura** (`SIS_CAPTURE_INTERFACE`) para tráfico SPAN.
 
 ### 3. Dependencia de logs y volumenes
 
@@ -373,6 +403,13 @@ docker compose logs -f cerebro
 docker compose logs -f filebeat
 ```
 
+## Configuración y secretos
+
+- Todas las variables de entorno del stack están documentadas en `.env.sis`.
+- **No** se incluyen credenciales SMTP en el repositorio.
+- Para habilitar alertas por correo, define en `.env`: `SIS_SMTP_SERVER`, `SIS_SMTP_PORT`, `SIS_SMTP_SENDER_EMAIL`, `SIS_SMTP_SENDER_PASSWORD`, `SIS_SMTP_RECEIVER_EMAIL`.
+- Si esos valores quedan vacíos, el core omite el envío de correos sin fallar.
+
 ### Opción 3: Confirmar ingestión en Elasticsearch
 
 Si el pipeline está funcionando, el índice histórico debería comenzar a poblarse y el dashboard debería reflejar eventos.
@@ -393,6 +430,8 @@ Dependiendo de la versión exacta del código, el dashboard contempla secciones 
 - **Vista histórica**
 
 La lógica de la interfaz está diseñada para que un operador pueda revisar eventos priorizados y navegar distintas capas de información desde un solo punto.
+
+Además, el sidebar muestra **Estado Sensores** (Zeek/Snort) en tiempo real usando heartbeat de salud (`Escuchando`, `Degradado`, `Caído`).
 
 ---
 

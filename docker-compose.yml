@@ -1,139 +1,180 @@
-#version: '3.8'
-
 services:
-
-  # =========================================
-  # 1. SENSORES DE RED (Captura)
-  # =========================================
   zeek:
-    build: ./config/zeek/zeek_custom
+    build: ./sensores/zeek/zeek_custom
     container_name: siem_zeek
     network_mode: "host"
     user: root
     cap_add:
-        - NET_ADMIN
-        - NET_RAW
+      - NET_ADMIN
+      - NET_RAW
     privileged: true
     environment:
-      - INTERFACE=lo
+      INTERFACE: ${SIS_CAPTURE_INTERFACE:-lo}
+      SIS_SENSOR_MODE: ${SIS_SENSOR_MODE:-demo}
+      SIS_SENSOR_PROMISCUOUS: ${SIS_SENSOR_PROMISCUOUS:-true}
     volumes:
-      - ./logs/logs_zeek:/pcap
-    restart: "no"
-    security_opt: 
-        - apparmor=unconfined
+      - ${SIS_ZEEK_LOGS_PATH:-./logs/logs_zeek}:/pcap
+      - ${SIS_SENSOR_HEALTH_PATH:-./logs/sensor_health}:/sensor-health
+    restart: unless-stopped
+    security_opt:
+      - apparmor=unconfined
 
   snort:
-    build: ./snort_core
+    build: ./sensores/snort
     container_name: siem_snort
     network_mode: "host"
     privileged: true
+    environment:
+      SIS_CAPTURE_INTERFACE: ${SIS_CAPTURE_INTERFACE:-lo}
+      SIS_SENSOR_MODE: ${SIS_SENSOR_MODE:-demo}
+      SIS_SENSOR_PROMISCUOUS: ${SIS_SENSOR_PROMISCUOUS:-true}
     volumes:
-      - ./logs/logs_snort:/var/log/snort
-      - ./config/snort/snort_config/snort.conf:/etc/snort/snort.conf
-      - ./config/snort/rules:/etc/snort/rules
-    command: snort -q -i lo -c /etc/snort/snort.conf -l /var/log/snort -A fast -k none
-    restart: always
-    security_opt: 
-        - apparmor=unconfined
+      - ${SIS_SNORT_LOGS_PATH:-./logs/logs_snort}:/var/log/snort
+      - ${SIS_SNORT_CONF_PATH:-./configuracion/snort/snort.conf}:/etc/snort/snort.conf:ro
+      - ${SIS_SNORT_RULES_PATH:-./reglas_firmas/snort_rules}:/etc/snort/rules:ro
+      - ${SIS_SENSOR_HEALTH_PATH:-./logs/sensor_health}:/sensor-health
+    restart: unless-stopped
+    security_opt:
+      - apparmor=unconfined
 
-  # =========================================
-  # 2. TRANSPORTE (Filebeat -> Redis)
-  # =========================================
   filebeat:
     image: docker.elastic.co/beats/filebeat:7.17.9
     container_name: siem_filebeat
     user: root
-    restart: always
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDIS_HOST: ${SIS_REDIS_HOST:-redis}
+      REDIS_PORT: ${SIS_REDIS_PORT:-6379}
+      SIS_REDIS_KEY: ${SIS_REDIS_KEY:-sis_queue}
     volumes:
-      - ./config/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
-      - ./logs/logs_zeek/logs/live:/logs/zeek:ro
-      - ./logs/logs_snort:/logs/snort:ro
+      - ./configuracion/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - ${SIS_ZEEK_LIVE_LOGS_PATH:-./logs/logs_zeek/logs/live}:/logs/zeek:ro
+      - ${SIS_SNORT_LOGS_PATH:-./logs/logs_snort}:/logs/snort:ro
+      - filebeat_data:/usr/share/filebeat/data
     depends_on:
       - redis
     command: filebeat -e -strict.perms=false
 
   redis:
-    image: redis:alpine
+    image: redis:7-alpine
     container_name: siem_redis
+    command: redis-server --appendonly yes
     ports:
-      - "6379:6379"
-    restart: always
+      - "${SIS_REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
 
-  # =========================================
-  # 3. BASE DE DATOS HISTÓRICA
-  # =========================================
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:7.17.9
     container_name: siem_elastic
     environment:
-      - discovery.type=single-node
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      discovery.type: single-node
+      ES_JAVA_OPTS: ${SIS_ES_JAVA_OPTS:--Xms512m -Xmx512m}
     ports:
-      - "9200:9200"
+      - "${SIS_ELASTIC_PORT:-9200}:9200"
     volumes:
       - elastic_data:/usr/share/elasticsearch/data
-    restart: always
+    restart: unless-stopped
 
-  # =========================================
-  # 4. CEREBRO INTELIGENTE (Python Core)
-  # =========================================
   cerebro:
-    build: ./python_core
+    build: ./core/cerebro
     container_name: siem_cerebro
     working_dir: /app
-    volumes:
-      - ./python_core:/app
-      # Logs
-      - ./logs/logs_zeek/logs/live:/var/log/zeek
-      - ./logs/logs_snort:/var/log/snort
-      - ./scripts:/scripts
-      
-      # --- CORRECCIÓN CEREBRO ---
-      # Apuntamos a /app/archivo para que coincida con el código
-      - ./ot_inventory.json:/app/ot_inventory.json
-      - ./cve_report.csv:/app/cve_report.csv
-      
+    env_file:
+      - .env
     environment:
-      - REDIS_HOST=redis
-      - ELASTIC_HOST=elasticsearch
+      REDIS_HOST: ${SIS_REDIS_HOST:-redis}
+      REDIS_PORT: ${SIS_REDIS_PORT:-6379}
+      REDIS_KEY: ${SIS_REDIS_KEY:-sis_queue}
+      ELASTIC_HOST: ${SIS_ELASTIC_HOST:-elasticsearch}
+      ELASTIC_PORT: ${SIS_ELASTIC_PORT:-9200}
+      SIS_INDEX_NAME: ${SIS_INDEX_NAME:-sis-logs-v1}
+      SIS_INVENTORY_PATH: ${SIS_INVENTORY_PATH:-/app/ot_inventory.json}
+      SIS_SMTP_SERVER: ${SIS_SMTP_SERVER:-}
+      SIS_SMTP_PORT: ${SIS_SMTP_PORT:-587}
+      SIS_SMTP_SENDER_EMAIL: ${SIS_SMTP_SENDER_EMAIL:-}
+      SIS_SMTP_SENDER_PASSWORD: ${SIS_SMTP_SENDER_PASSWORD:-}
+      SIS_SMTP_RECEIVER_EMAIL: ${SIS_SMTP_RECEIVER_EMAIL:-}
+      SIS_SMTP_USE_TLS: ${SIS_SMTP_USE_TLS:-true}
+    volumes:
+      - ./core/cerebro:/app
+      - ${SIS_ZEEK_LIVE_LOGS_PATH:-./logs/logs_zeek/logs/live}:/var/log/zeek
+      - ${SIS_SNORT_LOGS_PATH:-./logs/logs_snort}:/var/log/snort
+      - ./scripts_demo:/scripts_demo
+      - ./ot_inventory.json:/app/ot_inventory.json:ro
+      - ./cve_report.csv:/app/cve_report.csv:ro
     depends_on:
       - redis
       - elasticsearch
-    restart: always
+    restart: unless-stopped
 
-  # =========================================
-  # 5. DASHBOARD
-  # =========================================
   dashboard:
-    image: python:3.9-slim
+    build: ./dashboard/streamlit
     container_name: siem_dashboard
     working_dir: /app
-    volumes:
-      # Código fuente del dashboard
-      - ./mi_dashboard:/app
-      # Logs para visualización
-      - ./logs/logs_snort:/var/log/snort:ro
-      - ./logs/logs_zeek/logs/live:/var/log/zeek:ro
-      
-      # Scripts auxiliares
-      - ./python_core:/python_core
-      
-      # --- CORRECCIÓN DASHBOARD (CRUCIAL) ---
-      # Ahora el archivo se montará DENTRO de la carpeta de trabajo /app
-      - ./ot_inventory.json:/app/ot_inventory.json
-      - ./cve_report.csv:/app/cve_report.csv
-      
-    # Agregamos 'requests' a la instalación para que el scanner funcione
     command: >
-      sh -c "pip install --upgrade pip &&
-             pip install streamlit redis pandas elasticsearch plotly requests &&
-             streamlit run app.py"
+      streamlit run app.py
+      --server.address=${SIS_DASHBOARD_LISTEN_ADDRESS:-0.0.0.0}
+      --server.port=${SIS_DASHBOARD_INTERNAL_PORT:-8501}
+    env_file:
+      - .env
+    environment:
+      SIS_DASHBOARD_ELASTIC_HOST: ${SIS_ELASTIC_HOST:-elasticsearch}
+      SIS_DASHBOARD_ELASTIC_PORT: ${SIS_ELASTIC_PORT:-9200}
+      SIS_DASHBOARD_REDIS_HOST: ${SIS_REDIS_HOST:-redis}
+      SIS_DASHBOARD_REDIS_PORT: ${SIS_REDIS_PORT:-6379}
+      SIS_DASHBOARD_INDEX: ${SIS_INDEX_NAME:-sis-logs-v1}
+      SIS_DASHBOARD_INVENTORY_PATH: ${SIS_DASHBOARD_INVENTORY_PATH:-/app/ot_inventory.json}
+      SIS_DASHBOARD_REPORT_PATH: ${SIS_DASHBOARD_REPORT_PATH:-/app/cve_report.csv}
+      SIS_DASHBOARD_SCANNER_SCRIPT: ${SIS_DASHBOARD_SCANNER_SCRIPT:-/python_core/vuln_scanner.py}
+      SIS_SENSOR_HEALTH_DIR: /sensor-health
+    volumes:
+      - ./dashboard/streamlit:/app
+      - ${SIS_SNORT_LOGS_PATH:-./logs/logs_snort}:/var/log/snort:ro
+      - ${SIS_ZEEK_LIVE_LOGS_PATH:-./logs/logs_zeek/logs/live}:/var/log/zeek:ro
+      - ./core/cerebro:/python_core:ro
+      - ${SIS_SENSOR_HEALTH_PATH:-./logs/sensor_health}:/sensor-health:ro
+      - ./ot_inventory.json:/app/ot_inventory.json:ro
+      - ./cve_report.csv:/app/cve_report.csv:ro
     ports:
-      - "8501:8501"
+      - "${SIS_MANAGEMENT_BIND_IP:-0.0.0.0}:${SIS_DASHBOARD_PORT:-8501}:${SIS_DASHBOARD_INTERNAL_PORT:-8501}"
     depends_on:
       - redis
       - elasticsearch
-    restart: always
+    restart: unless-stopped
+
+
+  suricata:
+    image: jasonish/suricata:7.0
+    container_name: siem_suricata
+    profiles: ["suricata"]
+    network_mode: "host"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    command: >
+      suricata -i ${SIS_CAPTURE_INTERFACE:-lo}
+      -l /var/log/suricata
+    volumes:
+      - ${SIS_SURICATA_LOGS_PATH:-./logs/logs_suricata}:/var/log/suricata
+    restart: unless-stopped
+
+  nginx_proxy:
+    image: nginx:1.27-alpine
+    container_name: siem_nginx_proxy
+    profiles: ["proxy"]
+    ports:
+      - "${SIS_PROXY_PORT:-8080}:80"
+    volumes:
+      - ./configuracion/nginx/sis.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - dashboard
+    restart: unless-stopped
 
 volumes:
   elastic_data:
+  redis_data:
+  filebeat_data:

@@ -1,0 +1,6 @@
+redis
+elasticsearch
+numpy
+pandas
+scikit-learn
+watchdog

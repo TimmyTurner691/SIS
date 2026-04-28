@@ -11,6 +11,7 @@ import subprocess
 import re
 import time
 import redis  # <--- NUEVO: Necesario para enviar comandos
+from pathlib import Path
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="SIS - SIEM Dashboard", page_icon="🛡️", layout="wide")
@@ -25,21 +26,60 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-INVENTORY_FILE = "/app/ot_inventory.json"
-REPORT_FILE = "/app/cve_report.csv"
-SCANNER_SCRIPT = "/python_core/vuln_scanner.py"
+INVENTORY_FILE = os.getenv("SIS_DASHBOARD_INVENTORY_PATH", "/app/ot_inventory.json")
+REPORT_FILE = os.getenv("SIS_DASHBOARD_REPORT_PATH", "/app/cve_report.csv")
+SCANNER_SCRIPT = os.getenv("SIS_DASHBOARD_SCANNER_SCRIPT", "/python_core/vuln_scanner.py")
+ES_HOST = os.getenv("SIS_DASHBOARD_ELASTIC_HOST", "elasticsearch")
+ES_PORT = os.getenv("SIS_DASHBOARD_ELASTIC_PORT", "9200")
+REDIS_HOST = os.getenv("SIS_DASHBOARD_REDIS_HOST", "redis")
+REDIS_PORT = int(os.getenv("SIS_DASHBOARD_REDIS_PORT", "6379"))
+INDEX_NAME = os.getenv("SIS_DASHBOARD_INDEX", "sis-logs-v1")
+SENSOR_HEALTH_DIR = os.getenv("SIS_SENSOR_HEALTH_DIR", "/sensor-health")
 
 # --- CONEXIONES (ELASTIC Y REDIS) ---
-try: 
-    es = Elasticsearch("http://elasticsearch:9200")
-except: 
+try:
+    es = Elasticsearch(f"http://{ES_HOST}:{ES_PORT}")
+except Exception:
     es = None
 
 # Conexión a Redis para el Panel de Control
 try:
-    r = redis.Redis(host='redis', port=6379, db=0, decode_responses=True)
-except:
+    r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
+except Exception:
     r = None
+
+
+
+def _sensor_status(sensor_name):
+    file_path = Path(SENSOR_HEALTH_DIR) / f"{sensor_name}.json"
+    if not file_path.exists():
+        return "🔴 Caído", "Sin heartbeat"
+
+    try:
+        payload = json.loads(file_path.read_text())
+        ts_raw = payload.get("timestamp")
+        ts = pd.to_datetime(ts_raw, utc=True, errors="coerce")
+        age_sec = (pd.Timestamp.utcnow() - ts).total_seconds() if pd.notna(ts) else 999999
+
+        if age_sec <= 30:
+            state = "🟢 Escuchando"
+        elif age_sec <= 120:
+            state = "🟡 Degradado"
+        else:
+            state = "🔴 Caído"
+
+        info = f"if={payload.get('interface', 'N/A')} | promisc={payload.get('promiscuous', 'N/A')} | modo={payload.get('mode', 'N/A')}"
+        return state, info
+    except Exception:
+        return "🔴 Error", "Heartbeat inválido"
+
+
+def render_sensor_health_sidebar():
+    st.sidebar.markdown("### Estado Sensores")
+    for sensor in ["zeek", "snort"]:
+        state, info = _sensor_status(sensor)
+        st.sidebar.write(f"**{sensor.upper()}**: {state}")
+        st.sidebar.caption(info)
 
 # ==========================================
 # LÓGICA DE NEGOCIO (HELPER FUNCTIONS)
@@ -72,7 +112,7 @@ def get_data(minutes=60, start=None, end=None, limit=5000):
     }
 
     try:
-        res = es.search(index="sis-logs-v1", body=query)
+        res = es.search(index=INDEX_NAME, body=query)
         hits = [h['_source'] for h in res['hits']['hits']]
         
         if not hits:
@@ -323,6 +363,7 @@ def graficar_matriz_riesgo(df):
 # INTERFAZ DE USUARIO
 # ==========================================
 
+render_sensor_health_sidebar()
 st.sidebar.title("🎛️ Centro de Comando")
 
 # --- NUEVO: SECCIÓN CONTROL NEURAL ---
