@@ -1,2 +1,2 @@
-ip,device,cve_id,description,severity,score,link
-192.168.1.50,PLC_Hornos,CVE-2024-9999-DEMO,VULNERABILIDAD CRÍTICA SIMULADA: Desbordamiento de búfer en pila Modbus TCP permitiendo ejecución remota de código (RCE) y parada de proceso.,CRITICAL,10.0,https://nvd.nist.gov/vuln-metrics/cvss
+ip,device,cve_id,severity
+192.168.1.66,Reactor_Core,CVE-2025-0001,CRITICAL

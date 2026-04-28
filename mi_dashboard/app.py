@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 from elasticsearch import Elasticsearch
 import plotly.express as px
+import plotly.graph_objects as go
+import numpy as np
 import datetime
 import os
 import json
@@ -47,7 +49,8 @@ def get_data(minutes=60, start=None, end=None, limit=5000):
     # Definimos las columnas obligatorias ANTES de cualquier cosa
     cols_blindadas = [
         'protocol', 'src_port', 'dst_port', 'src_ip', 'dst_ip', 'conn_state',
-        'risk_total_score', 'risk_label', 'mitre_msg', 'source', 'sub_source', 
+        'risk_total_score', 'risk_label', 'risk_impact', 'risk_probability',
+        'mitre_msg', 'source', 'sub_source',
         'ai_score', 'raw_log', 'mitre_tactics', 'mitre_techniques',
         'comando_humano', '@timestamp'
     ]
@@ -85,6 +88,8 @@ def get_data(minutes=60, start=None, end=None, limit=5000):
         # Conversiones numéricas
         df['risk_total_score'] = pd.to_numeric(df['risk_total_score'], errors='coerce').fillna(0)
         df['ai_score'] = pd.to_numeric(df['ai_score'], errors='coerce').fillna(0.5)
+        df['risk_impact'] = pd.to_numeric(df['risk_impact'], errors='coerce').fillna(1)
+        df['risk_probability'] = pd.to_numeric(df['risk_probability'], errors='coerce').fillna(1)
 
         # Procesamiento de Fechas
         df['@timestamp'] = pd.to_datetime(df['@timestamp'])
@@ -131,6 +136,189 @@ def lógica_limpiar_snort_msg(row):
         return msg.replace('[**]', '').strip()
     return raw.replace('[**]', '').split('] ')[-1]
 
+def construir_matriz_riesgo(df):
+    df = df.copy()
+
+    df["risk_probability"] = pd.to_numeric(df["risk_probability"], errors="coerce").fillna(1).clip(1, 5).astype(int)
+    df["risk_impact"] = pd.to_numeric(df["risk_impact"], errors="coerce").fillna(1).clip(1, 5).astype(int)
+
+    conteo = (
+        df.groupby(["risk_impact", "risk_probability"])
+        .size()
+        .reset_index(name="count")
+    )
+
+    matriz_conteo = np.zeros((5, 5), dtype=int)
+
+    for _, row in conteo.iterrows():
+        impacto = int(row["risk_impact"]) - 1
+        prob = int(row["risk_probability"]) - 1
+        matriz_conteo[impacto, prob] = int(row["count"])
+
+    return matriz_conteo
+
+
+def construir_matriz_niveles():
+    """
+    Matriz fija de colores:
+    1 = verde
+    2 = amarillo
+    3 = naranjo
+    4 = rojo
+
+    Convención:
+    filas = impacto (Y) de 1 a 5
+    columnas = probabilidad (X) de 1 a 5
+    """
+
+    matriz_nivel = np.zeros((5, 5), dtype=int)
+
+    # Verde:
+    # 1x1-4 y 2x1-2
+    verdes = [
+        (1, 1), (1, 2), (1, 3), (1, 4),
+        (2, 1), (2, 2)
+    ]
+
+    # Amarillo:
+    # 1x5 y 2x3-5 y 3x1-3 y 4x1
+    amarillos = [
+        (1, 5),
+        (2, 3), (2, 4), (2, 5),
+        (3, 1), (3, 2), (3, 3),
+        (4, 1)
+    ]
+
+    # Naranjo:
+    # 3x4-5 y 4x2-3 y 5x1
+    naranjos = [
+        (3, 4), (3, 5),
+        (4, 2), (4, 3),
+        (5, 1)
+    ]
+
+    # Rojo:
+    # 4x4-5 y 5x2-5
+    rojos = [
+        (4, 4), (4, 5),
+        (5, 2), (5, 3), (5, 4), (5, 5)
+    ]
+
+    for impacto, probabilidad in verdes:
+        matriz_nivel[impacto - 1, probabilidad - 1] = 1
+
+    for impacto, probabilidad in amarillos:
+        matriz_nivel[impacto - 1, probabilidad - 1] = 2
+
+    for impacto, probabilidad in naranjos:
+        matriz_nivel[impacto - 1, probabilidad - 1] = 3
+
+    for impacto, probabilidad in rojos:
+        matriz_nivel[impacto - 1, probabilidad - 1] = 4
+
+    return matriz_nivel
+
+
+def graficar_matriz_riesgo(df):
+    matriz_conteo = construir_matriz_riesgo(df)
+
+    etiquetas_x = ["1. Remota", "2. Improbable", "3. Probable", "4. Esperable", "5. Casi cierta"]
+    etiquetas_y = ["1. Muy bajo", "2. Bajo", "3. Moderado", "4. Alto", "5. Crítico"]
+
+    # Mapa fijo de colores por celda
+    colores = {
+        1: "#7CB342",  # verde
+        2: "#FBC02D",  # amarillo
+        3: "#FB8C00",  # naranjo
+        4: "#EF5350",  # rojo
+    }
+
+    # Matriz fija según tus reglas
+    niveles = {
+        # Verde
+        (1, 1): 1, (1, 2): 1, (1, 3): 1, (1, 4): 1,
+        (2, 1): 1, (2, 2): 1,
+
+        # Amarillo
+        (1, 5): 2,
+        (2, 3): 2, (2, 4): 2, (2, 5): 2,
+        (3, 1): 2, (3, 2): 2, (3, 3): 2,
+        (4, 1): 2,
+
+        # Naranjo
+        (3, 4): 3, (3, 5): 3,
+        (4, 2): 3, (4, 3): 3,
+        (5, 1): 3,
+
+        # Rojo
+        (4, 4): 4, (4, 5): 4,
+        (5, 2): 4, (5, 3): 4, (5, 4): 4, (5, 5): 4,
+    }
+
+    fig = go.Figure()
+
+    # Dibujar 25 rectángulos fijos
+    for impacto in range(1, 6):          # Y
+        for probabilidad in range(1, 6):  # X
+            nivel = niveles[(impacto, probabilidad)]
+            color = colores[nivel]
+
+            x0 = probabilidad - 1
+            x1 = probabilidad
+            y0 = impacto - 1
+            y1 = impacto
+
+            fig.add_shape(
+                type="rect",
+                x0=x0, x1=x1,
+                y0=y0, y1=y1,
+                line=dict(color="white", width=2),
+                fillcolor=color,
+                layer="below"
+            )
+
+            conteo = int(matriz_conteo[impacto - 1, probabilidad - 1])
+
+            fig.add_annotation(
+                x=probabilidad - 0.5,
+                y=impacto - 0.5,
+                text=str(conteo),
+                showarrow=False,
+                font=dict(size=20, color="white")
+            )
+
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=[0.5, 1.5, 2.5, 3.5, 4.5],
+        ticktext=etiquetas_x,
+        range=[0, 5],
+        title="Probabilidad",
+        showgrid=False,
+        zeroline=False
+    )
+
+    fig.update_yaxes(
+        tickmode="array",
+        tickvals=[0.5, 1.5, 2.5, 3.5, 4.5],
+        ticktext=etiquetas_y,
+        range=[0, 5],
+        title="Impacto",
+        showgrid=False,
+        zeroline=False
+    )
+
+    fig.update_layout(
+        title="Probabilidad (X) vs Impacto (Y)",
+        template="plotly_dark",
+        height=700,
+        margin=dict(l=40, r=40, t=80, b=40),
+        font=dict(size=16),
+        paper_bgcolor="#0E1117",
+        plot_bgcolor="#0E1117"
+    )
+
+    return fig
+
 # ==========================================
 # INTERFAZ DE USUARIO
 # ==========================================
@@ -140,15 +328,26 @@ st.sidebar.title("🎛️ Centro de Comando")
 # --- NUEVO: SECCIÓN CONTROL NEURAL ---
 with st.sidebar.expander("🧠 Control IA & Memoria", expanded=True):
     st.markdown("Gestión del Cerebro:")
-    
-    if st.button("♻️ RESET TOTAL (Borrar Memoria)", type="primary"):
+
+    if st.button("♻️ RESET IA", type="secondary"):
         if r:
             try:
-                # 1. Enviar orden al cerebro
                 r.set("cmd_reset_brain", "true")
-                # 2. Borrar la cola de tráfico pendiente (sis_queue)
                 r.delete("sis_queue")
-                st.success("Orden enviada: Memoria borrada y Cola vaciada.")
+                st.success("Orden enviada: memoria IA y cola vaciadas.")
+                time.sleep(1)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error Redis: {e}")
+        else:
+            st.error("No hay conexión con Redis.")
+
+    if st.button("🧹 RESET DEMO TOTAL", type="primary"):
+        if r:
+            try:
+                r.set("cmd_full_reset_demo", "true")
+                r.delete("sis_queue")
+                st.success("Orden enviada: reinicio total de demo solicitado.")
                 time.sleep(1)
                 st.rerun()
             except Exception as e:
@@ -158,8 +357,13 @@ with st.sidebar.expander("🧠 Control IA & Memoria", expanded=True):
 
     if st.button("🎓 Forzar Re-entrenamiento"):
         if r:
-            r.set("cmd_force_train", "true")
-            st.info("Solicitud enviada.")
+            try:
+                r.set("cmd_force_train", "true")
+                st.info("Solicitud enviada.")
+            except Exception as e:
+                st.error(f"Error Redis: {e}")
+        else:
+            st.error("No hay conexión con Redis.")
 
 # -------------------------------------
 
@@ -261,10 +465,7 @@ with tab_risk:
         with col_viz:
             st.subheader("Matriz de Calor")
             if not df.empty and 'risk_impact' in df.columns and 'risk_probability' in df.columns:
-                fig = px.density_heatmap(
-                    df, x="risk_impact", y="risk_probability", nbinsx=5, nbinsy=5, 
-                    title="Amenaza (Y) vs Impacto (X)", range_x=[0.5, 5.5], range_y=[0.5, 5.5], color_continuous_scale="Reds"
-                )
+                fig = graficar_matriz_riesgo(df)
                 st.plotly_chart(fig, use_container_width=True)
 
 # ... (El resto de las pestañas sigue igual) ...
