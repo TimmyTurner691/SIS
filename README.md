@@ -270,7 +270,7 @@ cd SIS
 ### 2. Configurar variables de entorno
 
 ```bash
-cp .env.example .env
+cp .env.sis .env
 # Edita .env según tu entorno
 ```
 
@@ -383,7 +383,7 @@ docker compose logs -f filebeat
 
 ## Configuración y secretos
 
-- Todas las variables de entorno del stack están documentadas en `.env.example`.
+- Todas las variables de entorno del stack están documentadas en `.env.sis`.
 - **No** se incluyen credenciales SMTP en el repositorio.
 - Para habilitar alertas por correo, define en `.env`: `SIS_SMTP_SERVER`, `SIS_SMTP_PORT`, `SIS_SMTP_SENDER_EMAIL`, `SIS_SMTP_SENDER_PASSWORD`, `SIS_SMTP_RECEIVER_EMAIL`.
 - Si esos valores quedan vacíos, el core omite el envío de correos sin fallar.
