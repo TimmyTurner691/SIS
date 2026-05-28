@@ -12,6 +12,7 @@ from collections import deque
 from elasticsearch import Elasticsearch, helpers
 import warnings
 from elasticsearch import ElasticsearchWarning
+from discovered_assets import DiscoveredAssetStore
 
 warnings.filterwarnings("ignore", category=ElasticsearchWarning)
 
@@ -28,6 +29,7 @@ ELASTIC_HOST = os.getenv("ELASTIC_HOST", "elasticsearch")
 ELASTIC_PORT = int(os.getenv("ELASTIC_PORT", "9200"))
 REDIS_KEY = os.getenv("REDIS_KEY", "sis_queue")
 INDEX_NAME = os.getenv("SIS_INDEX_NAME", "sis-logs-v1")
+DISCOVERED_ASSETS_INDEX = os.getenv("SIS_DISCOVERED_ASSETS_INDEX", "sis-discovered-assets-v1")
 INVENTORY_FILE = os.getenv("SIS_INVENTORY_PATH", "/app/ot_inventory.json")
 
 IA_WINDOW_SIZE = 500
@@ -320,6 +322,7 @@ def main():
     print(f"🚀 SIS Core v7.2: MONITOR DE CONSOLA ACTIVO", flush=True)
     r, es = conectar_servicios()
     engine = RiskFusionEngine()
+    discovered_assets = DiscoveredAssetStore(es, DISCOVERED_ASSETS_INDEX)
 
     state = reset_brain_state()
     model = state["model"]
@@ -448,6 +451,7 @@ def main():
                 if not doc: continue
                 
                 final_doc = engine.evaluar_riesgo(doc, ai_score, IS_FLOOD)
+                discovered_assets.process_event(raw_json, final_doc)
                 
                 if final_doc.get('risk_label') == 'CRÍTICO' and not IS_FLOOD:
                     ip_atacante = final_doc.get('src_ip', 'unknown')
