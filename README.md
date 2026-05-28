@@ -264,6 +264,8 @@ SIS/
 
 Para despliegue en servidor con acceso remoto LAN y modo proxy opcional, revisa: `docs/INSTALL_SERVER_LINUX.md`.
 
+Para captura real desde interfaz física/puerto espejo (SPAN), revisa: `docs/SPAN_DEPLOYMENT.md`.
+
 
 ### 1. Clonar el repositorio
 
@@ -345,6 +347,13 @@ La configuración del MVP está pensada principalmente para **pruebas, demostrac
 
 La configuración actual apunta a una interfaz de captura local, por lo que el comportamiento observado puede estar orientado a tráfico simulado o generado dentro del mismo entorno de prueba.
 
+### 3. Interfaz de gestión vs captura
+
+En despliegue real se recomienda separar:
+
+- **Interfaz de gestión** (`SIS_MANAGEMENT_INTERFACE` / `SIS_MANAGEMENT_BIND_IP`) para acceso GUI/SSH.
+- **Interfaz de captura** (`SIS_CAPTURE_INTERFACE`) para tráfico SPAN.
+
 ### 3. Dependencia de logs y volumenes
 
 El correcto funcionamiento depende de que:
@@ -422,6 +431,8 @@ Dependiendo de la versión exacta del código, el dashboard contempla secciones 
 
 La lógica de la interfaz está diseñada para que un operador pueda revisar eventos priorizados y navegar distintas capas de información desde un solo punto.
 
+Además, el sidebar muestra **Estado Sensores** (Zeek/Snort) en tiempo real usando heartbeat de salud (`Escuchando`, `Degradado`, `Caído`).
+
 ---
 
 ## Casos de uso que este MVP demuestra
@@ -498,6 +509,12 @@ Antes de mostrar el proyecto, conviene:
 ## Resumen ejecutivo
 
 **SIS** es un MVP de plataforma SIEM/OT que integra captura de tráfico, detección por firmas, procesamiento inteligente, almacenamiento histórico y visualización web en una arquitectura Docker. Su valor principal está en demostrar cómo eventos de ciberseguridad en entornos industriales pueden ser detectados, enriquecidos y priorizados dentro de una sola solución operativa.
+
+---
+
+## Licencia / uso
+
+Se recomienda agregar aquí la licencia del proyecto si se desea formalizar su distribución, reutilización o presentación pública.
 
 ---
 
