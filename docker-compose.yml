@@ -10,8 +10,11 @@ services:
     privileged: true
     environment:
       INTERFACE: ${SIS_CAPTURE_INTERFACE:-lo}
+      SIS_SENSOR_MODE: ${SIS_SENSOR_MODE:-demo}
+      SIS_SENSOR_PROMISCUOUS: ${SIS_SENSOR_PROMISCUOUS:-true}
     volumes:
       - ${SIS_ZEEK_LOGS_PATH:-./logs/logs_zeek}:/pcap
+      - ${SIS_SENSOR_HEALTH_PATH:-./logs/sensor_health}:/sensor-health
     restart: unless-stopped
     security_opt:
       - apparmor=unconfined
@@ -21,13 +24,15 @@ services:
     container_name: siem_snort
     network_mode: "host"
     privileged: true
+    environment:
+      SIS_CAPTURE_INTERFACE: ${SIS_CAPTURE_INTERFACE:-lo}
+      SIS_SENSOR_MODE: ${SIS_SENSOR_MODE:-demo}
+      SIS_SENSOR_PROMISCUOUS: ${SIS_SENSOR_PROMISCUOUS:-true}
     volumes:
       - ${SIS_SNORT_LOGS_PATH:-./logs/logs_snort}:/var/log/snort
       - ${SIS_SNORT_CONF_PATH:-./configuracion/snort/snort.conf}:/etc/snort/snort.conf:ro
       - ${SIS_SNORT_RULES_PATH:-./reglas_firmas/snort_rules}:/etc/snort/rules:ro
-    command: >
-      snort -q -i ${SIS_CAPTURE_INTERFACE:-lo}
-      -c /etc/snort/snort.conf -l /var/log/snort -A fast -k none
+      - ${SIS_SENSOR_HEALTH_PATH:-./logs/sensor_health}:/sensor-health
     restart: unless-stopped
     security_opt:
       - apparmor=unconfined
@@ -125,18 +130,36 @@ services:
       SIS_DASHBOARD_INVENTORY_PATH: ${SIS_DASHBOARD_INVENTORY_PATH:-/app/ot_inventory.json}
       SIS_DASHBOARD_REPORT_PATH: ${SIS_DASHBOARD_REPORT_PATH:-/app/cve_report.csv}
       SIS_DASHBOARD_SCANNER_SCRIPT: ${SIS_DASHBOARD_SCANNER_SCRIPT:-/python_core/vuln_scanner.py}
+      SIS_SENSOR_HEALTH_DIR: /sensor-health
     volumes:
       - ./dashboard/streamlit:/app
       - ${SIS_SNORT_LOGS_PATH:-./logs/logs_snort}:/var/log/snort:ro
       - ${SIS_ZEEK_LIVE_LOGS_PATH:-./logs/logs_zeek/logs/live}:/var/log/zeek:ro
       - ./core/cerebro:/python_core:ro
+      - ${SIS_SENSOR_HEALTH_PATH:-./logs/sensor_health}:/sensor-health:ro
       - ./ot_inventory.json:/app/ot_inventory.json:ro
       - ./cve_report.csv:/app/cve_report.csv:ro
     ports:
-      - "${SIS_DASHBOARD_PORT:-8501}:${SIS_DASHBOARD_INTERNAL_PORT:-8501}"
+      - "${SIS_MANAGEMENT_BIND_IP:-0.0.0.0}:${SIS_DASHBOARD_PORT:-8501}:${SIS_DASHBOARD_INTERNAL_PORT:-8501}"
     depends_on:
       - redis
       - elasticsearch
+    restart: unless-stopped
+
+
+  suricata:
+    image: jasonish/suricata:7.0
+    container_name: siem_suricata
+    profiles: ["suricata"]
+    network_mode: "host"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    command: >
+      suricata -i ${SIS_CAPTURE_INTERFACE:-lo}
+      -l /var/log/suricata
+    volumes:
+      - ${SIS_SURICATA_LOGS_PATH:-./logs/logs_suricata}:/var/log/suricata
     restart: unless-stopped
 
   nginx_proxy:
