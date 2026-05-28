@@ -11,6 +11,7 @@ import subprocess
 import re
 import time
 import redis  # <--- NUEVO: Necesario para enviar comandos
+from pathlib import Path
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="SIS - SIEM Dashboard", page_icon="🛡️", layout="wide")
@@ -33,6 +34,7 @@ ES_PORT = os.getenv("SIS_DASHBOARD_ELASTIC_PORT", "9200")
 REDIS_HOST = os.getenv("SIS_DASHBOARD_REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("SIS_DASHBOARD_REDIS_PORT", "6379"))
 INDEX_NAME = os.getenv("SIS_DASHBOARD_INDEX", "sis-logs-v1")
+SENSOR_HEALTH_DIR = os.getenv("SIS_SENSOR_HEALTH_DIR", "/sensor-health")
 
 # --- CONEXIONES (ELASTIC Y REDIS) ---
 try:
@@ -45,6 +47,39 @@ try:
     r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
 except Exception:
     r = None
+
+
+
+def _sensor_status(sensor_name):
+    file_path = Path(SENSOR_HEALTH_DIR) / f"{sensor_name}.json"
+    if not file_path.exists():
+        return "🔴 Caído", "Sin heartbeat"
+
+    try:
+        payload = json.loads(file_path.read_text())
+        ts_raw = payload.get("timestamp")
+        ts = pd.to_datetime(ts_raw, utc=True, errors="coerce")
+        age_sec = (pd.Timestamp.utcnow() - ts).total_seconds() if pd.notna(ts) else 999999
+
+        if age_sec <= 30:
+            state = "🟢 Escuchando"
+        elif age_sec <= 120:
+            state = "🟡 Degradado"
+        else:
+            state = "🔴 Caído"
+
+        info = f"if={payload.get('interface', 'N/A')} | promisc={payload.get('promiscuous', 'N/A')} | modo={payload.get('mode', 'N/A')}"
+        return state, info
+    except Exception:
+        return "🔴 Error", "Heartbeat inválido"
+
+
+def render_sensor_health_sidebar():
+    st.sidebar.markdown("### Estado Sensores")
+    for sensor in ["zeek", "snort"]:
+        state, info = _sensor_status(sensor)
+        st.sidebar.write(f"**{sensor.upper()}**: {state}")
+        st.sidebar.caption(info)
 
 # ==========================================
 # LÓGICA DE NEGOCIO (HELPER FUNCTIONS)
@@ -328,6 +363,7 @@ def graficar_matriz_riesgo(df):
 # INTERFAZ DE USUARIO
 # ==========================================
 
+render_sensor_health_sidebar()
 st.sidebar.title("🎛️ Centro de Comando")
 
 # --- NUEVO: SECCIÓN CONTROL NEURAL ---
