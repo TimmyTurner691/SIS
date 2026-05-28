@@ -163,5 +163,3 @@ docker compose down -v
 ## 8) Captura real por SPAN
 
 Para despliegue con interfaz física dedicada y puerto espejo, revisa: `docs/SPAN_DEPLOYMENT.md`.
-
-
