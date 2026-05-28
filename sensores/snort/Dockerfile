@@ -15,4 +15,8 @@ RUN mkdir -p /var/log/snort && \
     touch /etc/snort/snort.conf
 
 # El comando por defecto (se sobreescribe en el compose, pero por seguridad)
-CMD ["snort", "--version"]
+
+COPY start_snort.sh /opt/start_snort.sh
+RUN chmod +x /opt/start_snort.sh
+
+CMD ["/opt/start_snort.sh"]
