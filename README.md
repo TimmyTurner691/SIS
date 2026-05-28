@@ -515,3 +515,9 @@ Antes de mostrar el proyecto, conviene:
 ## Licencia / uso
 
 Se recomienda agregar aquí la licencia del proyecto si se desea formalizar su distribución, reutilización o presentación pública.
+
+---
+
+## Licencia / uso
+
+Se recomienda agregar aquí la licencia del proyecto si se desea formalizar su distribución, reutilización o presentación pública.
