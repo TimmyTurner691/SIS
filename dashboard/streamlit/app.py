@@ -12,6 +12,7 @@ import re
 import time
 import redis  # <--- NUEVO: Necesario para enviar comandos
 from pathlib import Path
+from signature_manager import apply_packages, load_catalog, load_state, profile_packages, validate_rules, build_effective_rules
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="SIS - SIEM Dashboard", page_icon="🛡️", layout="wide")
@@ -35,6 +36,7 @@ REDIS_HOST = os.getenv("SIS_DASHBOARD_REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("SIS_DASHBOARD_REDIS_PORT", "6379"))
 INDEX_NAME = os.getenv("SIS_DASHBOARD_INDEX", "sis-logs-v1")
 SENSOR_HEALTH_DIR = os.getenv("SIS_SENSOR_HEALTH_DIR", "/sensor-health")
+SIGNATURE_ACTIVE_RULES_PATH = os.getenv("SIS_SIGNATURE_ACTIVE_RULES_PATH", "/signature-rules/snort_rules/active.rules")
 
 # --- CONEXIONES (ELASTIC Y REDIS) ---
 try:
@@ -80,6 +82,88 @@ def render_sensor_health_sidebar():
         state, info = _sensor_status(sensor)
         st.sidebar.write(f"**{sensor.upper()}**: {state}")
         st.sidebar.caption(info)
+
+
+def render_signatures_tab():
+    st.header("✍️ Firmas / Reglas")
+    st.caption("Activa solo las familias de firmas relevantes para el caso de uso del cliente. El set efectivo se genera antes de pedir recarga segura del sensor.")
+
+    try:
+        catalog = load_catalog()
+        state = load_state()
+    except Exception as e:
+        st.error(f"No se pudo cargar el catálogo de firmas: {e}")
+        return
+
+    packages = catalog.get("packages", [])
+    profiles = catalog.get("profiles", [])
+    package_by_id = {pkg["id"]: pkg for pkg in packages}
+    enabled_default = [pkg for pkg in state.get("enabled_packages", []) if pkg in package_by_id]
+
+    c_profile, c_summary = st.columns([1, 1])
+    selected_profile = None
+    with c_profile:
+        st.subheader("5.4 Perfiles de detección")
+        profile_labels = {f"{p['name']} — {p['description']}": p["id"] for p in profiles}
+        if profile_labels:
+            selected_label = st.selectbox("Perfil prearmado", list(profile_labels.keys()))
+            selected_profile = profile_labels[selected_label]
+            profile_pkg_ids = profile_packages(selected_profile, catalog)
+            st.info("Paquetes del perfil: " + ", ".join(package_by_id[p]["name"] for p in profile_pkg_ids if p in package_by_id))
+            if st.button("Aplicar perfil", type="secondary"):
+                result = apply_packages(profile_pkg_ids, profile_id=selected_profile)
+                if result.get("ok"):
+                    st.success(f"Perfil aplicado. {result['validation']['rule_count']} reglas activas validadas.")
+                    st.rerun()
+                else:
+                    st.error("Validación fallida: " + "; ".join(result["validation"].get("errors", [])))
+
+    with c_summary:
+        st.subheader("5.2 Set efectivo activo")
+        validation_preview = validate_rules(build_effective_rules(enabled_default, catalog))
+        st.metric("Paquetes habilitados", len(enabled_default))
+        st.metric("Reglas efectivas", validation_preview["rule_count"])
+        st.caption(f"Última actualización: {state.get('updated_at', 'N/A')}")
+        st.caption(f"Archivo activo: {SIGNATURE_ACTIVE_RULES_PATH}")
+
+    st.divider()
+    st.subheader("5.1 Catálogo modular de paquetes")
+    selected = []
+    categories = sorted(set(pkg.get("category", "Otros") for pkg in packages))
+    for category in categories:
+        with st.expander(category, expanded=True):
+            for pkg in [p for p in packages if p.get("category", "Otros") == category]:
+                checked = st.checkbox(
+                    f"{pkg['name']} ({len(pkg.get('rules', []))} reglas)",
+                    value=pkg["id"] in enabled_default,
+                    key=f"sig_pkg_{pkg['id']}",
+                    help=pkg.get("description", "")
+                )
+                if checked:
+                    selected.append(pkg["id"])
+                st.caption(pkg.get("description", ""))
+
+    preview = build_effective_rules(selected, catalog)
+    validation = validate_rules(preview)
+
+    st.subheader("5.5 Validación previa y recarga segura")
+    if validation["valid"]:
+        st.success(f"Validación local OK: {validation['rule_count']} reglas sin SID duplicados ni formato inválido.")
+    else:
+        st.error("Errores de validación: " + "; ".join(validation["errors"]))
+    for warning in validation.get("warnings", []):
+        st.warning(warning)
+
+    with st.expander("Vista previa de active.rules"):
+        st.code(preview, language="text")
+
+    if st.button("Guardar cambios y solicitar recarga del sensor", type="primary", disabled=not validation["valid"]):
+        result = apply_packages(selected, profile_id=selected_profile)
+        if result.get("ok"):
+            st.success(f"Cambios aplicados. Sensor Snort usará {result['validation']['rule_count']} reglas activas tras la recarga segura.")
+            st.rerun()
+        else:
+            st.error("No se aplicaron cambios: " + "; ".join(result["validation"].get("errors", [])))
 
 # ==========================================
 # LÓGICA DE NEGOCIO (HELPER FUNCTIONS)
@@ -444,8 +528,8 @@ else:
 # ==========================================
 # PESTAÑAS Y VISUALIZACIÓN (Sin cambios abajo)
 # ==========================================
-tab_risk, tab_snort, tab_net, tab_ot, tab_vuln, tab_raw = st.tabs([
-    "🚨 Fusión de Riesgos", "🛡️ IDS", "🌐 Red", "🏭 SCADA", "⚠️ Vulnerabilidades", "📝 Logs Raw"
+tab_risk, tab_snort, tab_net, tab_ot, tab_vuln, tab_signatures, tab_raw = st.tabs([
+    "🚨 Fusión de Riesgos", "🛡️ IDS", "🌐 Red", "🏭 SCADA", "⚠️ Vulnerabilidades", "✍️ Firmas / Reglas", "📝 Logs Raw"
 ])
 
 # ---------------- PESTAÑA 1: RIESGOS ----------------
@@ -606,6 +690,10 @@ with tab_vuln:
                 else: st.info("✅ Reporte vacío.")
             except: st.error("Error leyendo reporte.")
         else: st.info("ℹ️ Sin reportes.")
+
+# Pestaña Firmas / Reglas
+with tab_signatures:
+    render_signatures_tab()
 
 # Pestaña Raw
 with tab_raw:

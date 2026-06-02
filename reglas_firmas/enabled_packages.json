@@ -1,0 +1,12 @@
+{
+  "enabled_packages": [
+    "dns",
+    "iec104",
+    "modbus",
+    "otros",
+    "web"
+  ],
+  "last_profile": "mixto_liviano",
+  "updated_at": "2026-06-02T15:52:14.908616+00:00",
+  "updated_by": "bootstrap"
+}

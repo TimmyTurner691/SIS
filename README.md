@@ -521,3 +521,18 @@ Se recomienda agregar aquí la licencia del proyecto si se desea formalizar su d
 ## Licencia / uso
 
 Se recomienda agregar aquí la licencia del proyecto si se desea formalizar su distribución, reutilización o presentación pública.
+
+---
+
+## Sistema modular de firmas
+
+SIS incluye un modelo modular para activar solo las firmas relevantes de cada despliegue:
+
+- **Catálogo de paquetes**: `reglas_firmas/signature_catalog.json` define familias como IEC-104, Modbus, IEC-61850, Windows, Linux, Web, DNS, SMB y Otros. Cada paquete agrupa reglas Snort por categoría funcional.
+- **Estado de activación**: `reglas_firmas/enabled_packages.json` registra los paquetes habilitados y el último perfil aplicado.
+- **Set efectivo**: `reglas_firmas/snort_rules/active.rules` se genera automáticamente con las reglas de los paquetes activos; `snort.conf` incluye este archivo para que el sensor use solo esas firmas.
+- **Perfiles prearmados**: el catálogo incluye perfiles como OT eléctrico, TI Windows, Linux/Web y Mixto liviano. El operador puede aplicarlos y luego ajustar paquetes individuales.
+- **GUI Firmas / Reglas**: el dashboard agrega la pestaña **Firmas / Reglas**, donde se revisa el catálogo, se activan o desactivan paquetes, se previsualiza `active.rules` y se solicita la recarga.
+- **Recarga segura**: antes de aplicar cambios, el gestor valida formato básico y SIDs duplicados. El contenedor Snort además ejecuta `snort -T` y solo reinicia el proceso si la configuración es válida, evitando romper el stack completo por reglas defectuosas.
+
+El dashboard escribe los cambios en el volumen `./reglas_firmas`, y el sensor Snort observa `active.rules`/`reload_request.json` para recargar con impacto controlado.
