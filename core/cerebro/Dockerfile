@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 COPY requirements.txt /tmp/requirements.txt
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends nmap && \
+    apt-get install -y --no-install-recommends nmap iproute2 && \
     rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir --upgrade pip && \

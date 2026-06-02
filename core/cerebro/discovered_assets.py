@@ -274,6 +274,77 @@ def merge_asset(existing, observation):
     return asset
 
 
+
+
+def arp_neighbors_from_ip_neigh(output):
+    neighbors = {}
+    try:
+        rows = json.loads(output)
+    except (TypeError, ValueError):
+        return neighbors
+
+    for row in rows if isinstance(rows, list) else []:
+        ip = row.get("dst")
+        mac = normalize_mac(row.get("lladdr"))
+        state = row.get("state", [])
+        if isinstance(state, str):
+            state = [state]
+        if is_private_ipv4(ip) and mac and "FAILED" not in state and "INCOMPLETE" not in state:
+            neighbors[str(ip)] = {"mac": mac}
+    return neighbors
+
+
+def arp_neighbors_from_proc_arp(output):
+    neighbors = {}
+    for line in str(output).splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        ip = parts[0]
+        mac = normalize_mac(parts[3])
+        if is_private_ipv4(ip) and mac and mac != "00:00:00:00:00:00":
+            neighbors[str(ip)] = {"mac": mac}
+    return neighbors
+
+
+def collect_arp_neighbors():
+    neighbors = {}
+    try:
+        result = subprocess.run(
+            ["ip", "-json", "neigh", "show"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            neighbors.update(arp_neighbors_from_ip_neigh(result.stdout))
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    try:
+        with open("/proc/net/arp", "r") as arp_file:
+            neighbors.update(arp_neighbors_from_proc_arp(arp_file.read()))
+    except OSError:
+        pass
+
+    return neighbors
+
+
+def enrich_observations_with_arp(observations, neighbors=None):
+    neighbors = neighbors if neighbors is not None else collect_arp_neighbors()
+    enriched = []
+    for observation in observations:
+        observation = dict(observation)
+        arp_data = neighbors.get(observation.get("ip"), {})
+        if not observation.get("mac") and arp_data.get("mac"):
+            observation["mac"] = arp_data["mac"]
+        if arp_data.get("vendor") and not observation.get("vendor"):
+            observation["vendor"] = arp_data["vendor"]
+        enriched.append(observation)
+    return enriched
+
+
 def parse_nmap_ping_sweep(xml_output):
     observations = []
     try:
@@ -438,7 +509,7 @@ class DiscoveredAssetStore:
         return scheduled
 
     def _run_nmap_ping_sweep(self, network):
-        command = ["nmap", "-sn", "-PE", "-oX", "-", network]
+        command = ["nmap", "-sn", "-PR", "-PE", "--send-eth", "-oX", "-", network]
         try:
             result = subprocess.run(
                 command,
@@ -455,14 +526,35 @@ class DiscoveredAssetStore:
             return
 
         if result.returncode not in (0, 1):
+            fallback_command = ["nmap", "-sn", "-PR", "-PE", "-oX", "-", network]
+            print(f"⚠️ nmap --send-eth terminó con código {result.returncode}; reintentando sin --send-eth para {network}...", flush=True)
+            try:
+                result = subprocess.run(
+                    fallback_command,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=NMAP_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired:
+                print(f"⚠️ Timeout ejecutando fallback nmap sobre {network}", flush=True)
+                return
+
+        if result.returncode not in (0, 1):
             print(f"⚠️ nmap terminó con código {result.returncode} para {network}: {result.stderr[:300]}", flush=True)
             return
 
+        observations = parse_nmap_ping_sweep(result.stdout)
+        observations = enrich_observations_with_arp(observations)
+
         count = 0
-        for observation in parse_nmap_ping_sweep(result.stdout):
+        mac_count = 0
+        for observation in observations:
             if self.upsert_observation(observation):
                 count += 1
-        print(f"✅ Ping sweep completado en {network}: {count} equipos activos registrados/actualizados.", flush=True)
+                if observation.get("mac"):
+                    mac_count += 1
+        print(f"✅ Ping sweep completado en {network}: {count} equipos activos registrados/actualizados ({mac_count} con MAC).", flush=True)
 
     def process_event(self, raw_json, normalized_doc):
         updated = []

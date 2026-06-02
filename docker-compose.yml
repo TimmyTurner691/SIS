@@ -82,14 +82,18 @@ services:
   cerebro:
     build: ./core/cerebro
     container_name: siem_cerebro
+    network_mode: "host"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     working_dir: /app
     env_file:
       - .env
     environment:
-      REDIS_HOST: ${SIS_REDIS_HOST:-redis}
+      REDIS_HOST: ${SIS_REDIS_HOST:-127.0.0.1}
       REDIS_PORT: ${SIS_REDIS_PORT:-6379}
       REDIS_KEY: ${SIS_REDIS_KEY:-sis_queue}
-      ELASTIC_HOST: ${SIS_ELASTIC_HOST:-elasticsearch}
+      ELASTIC_HOST: ${SIS_ELASTIC_HOST:-127.0.0.1}
       ELASTIC_PORT: ${SIS_ELASTIC_PORT:-9200}
       SIS_INDEX_NAME: ${SIS_INDEX_NAME:-sis-logs-v1}
       SIS_DISCOVERED_ASSETS_INDEX: ${SIS_DISCOVERED_ASSETS_INDEX:-sis-discovered-assets-v1}
