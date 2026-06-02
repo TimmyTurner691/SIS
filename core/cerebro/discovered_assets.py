@@ -385,17 +385,57 @@ class DiscoveredAssetStore:
         return asset
 
     def schedule_active_sweep(self, ip):
-        if not self.active_sweep_enabled or not is_private_ipv4(ip):
+        if not is_private_ipv4(ip):
             return
         network = network_for_ip(ip)
-        if not network:
-            return
+        if network:
+            self.schedule_network_sweep(network)
+
+    def schedule_network_sweep(self, network, force=False):
+        if not self.active_sweep_enabled:
+            return False
+        try:
+            parsed_network = ipaddress.ip_network(network, strict=False)
+        except ValueError:
+            return False
+        if parsed_network.version != 4 or not any(parsed_network.subnet_of(private_net) for private_net in RFC1918_NETWORKS):
+            return False
+
+        network = str(parsed_network)
         with self._sweep_lock:
-            if network in self._scheduled_networks:
-                return
+            if not force and network in self._scheduled_networks:
+                return False
             self._scheduled_networks.add(network)
-        print(f"🧭 Nueva red privada descubierta: {network}. Ejecutando ping sweep nmap no intrusivo...", flush=True)
+
+        action = "Re-ejecutando" if force else "Ejecutando"
+        print(f"🧭 {action} ping sweep nmap no intrusivo sobre {network}...", flush=True)
         self._executor.submit(self._run_nmap_ping_sweep, network)
+        return True
+
+    def rescan_discovered_networks(self):
+        networks = set()
+        try:
+            res = self.es.search(
+                index=self.index_name,
+                body={"query": {"match_all": {}}, "size": 10000, "_source": ["ip"]},
+                ignore_unavailable=True,
+            )
+            for hit in res.get("hits", {}).get("hits", []):
+                ip = hit.get("_source", {}).get("ip")
+                if is_private_ipv4(ip):
+                    network = network_for_ip(ip)
+                    if network:
+                        networks.add(network)
+        except Exception as e:
+            print(f"⚠️ No se pudieron obtener redes descubiertas para re-escaneo: {e}", flush=True)
+            return 0
+
+        scheduled = 0
+        for network in sorted(networks):
+            if self.schedule_network_sweep(network, force=True):
+                scheduled += 1
+        print(f"🔁 Re-escaneo manual solicitado: {scheduled} redes agendadas.", flush=True)
+        return scheduled
 
     def _run_nmap_ping_sweep(self, network):
         command = ["nmap", "-sn", "-PE", "-oX", "-", network]

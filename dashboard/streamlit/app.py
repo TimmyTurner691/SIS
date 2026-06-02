@@ -64,6 +64,16 @@ def is_private_ipv4_address(value):
     return last_octet not in {0, 255}
 
 
+def network_for_private_ipv4_address(value, prefix=24):
+    if not is_private_ipv4_address(value):
+        return None
+    try:
+        prefix = min(max(int(prefix), 24), 30)
+        return str(ipaddress.ip_network(f"{value}/{prefix}", strict=False))
+    except ValueError:
+        return None
+
+
 def _sensor_status(sensor_name):
     file_path = Path(SENSOR_HEALTH_DIR) / f"{sensor_name}.json"
     if not file_path.exists():
@@ -658,6 +668,29 @@ with tab_assets:
     st.caption("Activos consolidados automáticamente desde tráfico Zeek, alertas IDS y otras fuentes observadas.")
 
     df_assets = get_discovered_assets()
+    redes_descubiertas = sorted({
+        network
+        for ip in df_assets.get("ip", pd.Series(dtype=str)).astype(str)
+        if (network := network_for_private_ipv4_address(ip))
+    })
+
+    action_col, info_col = st.columns([1, 3])
+    with action_col:
+        if st.button("🔁 Re-escanear redes descubiertas", type="secondary", disabled=not redes_descubiertas):
+            if r:
+                try:
+                    r.set("cmd_rescan_discovered_networks", "true")
+                    st.success(f"Orden enviada: se re-escanearán {len(redes_descubiertas)} redes descubiertas con nmap ping sweep.")
+                except Exception as e:
+                    st.error(f"Error Redis: {e}")
+            else:
+                st.error("No hay conexión con Redis para enviar la orden de re-escaneo.")
+    with info_col:
+        st.caption(
+            "Redes detectadas para re-escaneo: "
+            + (", ".join(redes_descubiertas) if redes_descubiertas else "ninguna todavía")
+        )
+
     if df_assets.empty:
         st.info("Aún no hay equipos descubiertos. Se poblarán automáticamente cuando llegue tráfico nuevo.")
     else:

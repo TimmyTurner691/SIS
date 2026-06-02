@@ -387,6 +387,13 @@ def main():
                 is_trained = False
                 r.delete("cmd_force_train")
 
+            # 4. Re-escanear manualmente redes descubiertas
+            if r.exists("cmd_rescan_discovered_networks"):
+                print("🔁 COMANDO: Re-escaneando redes descubiertas...", flush=True)
+                scheduled = discovered_assets.rescan_discovered_networks()
+                r.set("cmd_rescan_discovered_networks_result", str(scheduled), ex=120)
+                r.delete("cmd_rescan_discovered_networks")
+
             # ------------------------------------
 
             batch_raw = []
