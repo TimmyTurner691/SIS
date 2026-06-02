@@ -217,6 +217,34 @@ def get_discovered_assets(limit=2000):
 
 
 
+
+def ensure_discovered_asset_selection_state():
+    if "selected_discovered_asset_ids" not in st.session_state:
+        st.session_state["selected_discovered_asset_ids"] = set()
+    elif not isinstance(st.session_state["selected_discovered_asset_ids"], set):
+        st.session_state["selected_discovered_asset_ids"] = set(st.session_state["selected_discovered_asset_ids"])
+
+
+def sync_discovered_asset_selection_from_editor():
+    ensure_discovered_asset_selection_state()
+    editor_state = st.session_state.get("discovered_assets_selection_editor", {})
+    visible_ids = st.session_state.get("discovered_assets_visible_ids", [])
+    selected = set(st.session_state["selected_discovered_asset_ids"])
+
+    for row_idx, changes in editor_state.get("edited_rows", {}).items():
+        try:
+            asset_id = visible_ids[int(row_idx)]
+        except (ValueError, IndexError):
+            continue
+        if "seleccionar" not in changes:
+            continue
+        if changes["seleccionar"]:
+            selected.add(asset_id)
+        else:
+            selected.discard(asset_id)
+
+    st.session_state["selected_discovered_asset_ids"] = selected
+
 def delete_discovered_assets(asset_ids):
     if not es:
         return False, "No hay conexión con Elasticsearch."
@@ -756,14 +784,30 @@ with tab_assets:
         if filtrado.empty:
             st.warning("No hay equipos descubiertos que coincidan con los filtros actuales.")
         else:
+            ensure_discovered_asset_selection_state()
+            visible_asset_ids = filtrado["asset_id"].dropna().astype(str).tolist()
+            visible_asset_id_set = set(visible_asset_ids)
+            st.session_state["discovered_assets_visible_ids"] = visible_asset_ids
+
             select_all_assets = st.checkbox("Seleccionar todos los activos filtrados", key="select_all_discovered_assets")
+            previous_select_all = st.session_state.get("_previous_select_all_discovered_assets", False)
+            if select_all_assets != previous_select_all:
+                selected_state = set(st.session_state["selected_discovered_asset_ids"])
+                if select_all_assets:
+                    selected_state.update(visible_asset_id_set)
+                else:
+                    selected_state.difference_update(visible_asset_id_set)
+                st.session_state["selected_discovered_asset_ids"] = selected_state
+                st.session_state["_previous_select_all_discovered_assets"] = select_all_assets
+
             table_columns = [
                 "seleccionar", "ip", "hostname", "mac", "vendor_oui", "protocolos_vistos",
                 "puertos_observados", "primera_vez_visto", "ultima_vez_visto",
                 "criticidad_sugerida", "so_estimado", "fuentes", "event_count", "asset_id"
             ]
             table_df = filtrado.copy()
-            table_df.insert(0, "seleccionar", bool(select_all_assets))
+            selected_state = set(st.session_state["selected_discovered_asset_ids"])
+            table_df.insert(0, "seleccionar", table_df["asset_id"].astype(str).isin(selected_state))
 
             edited_assets = st.data_editor(
                 table_df[table_columns],
@@ -771,18 +815,25 @@ with tab_assets:
                 hide_index=True,
                 disabled=[col for col in table_columns if col != "seleccionar"],
                 column_config={
-                    "seleccionar": st.column_config.CheckboxColumn("Seleccionar", default=bool(select_all_assets)),
+                    "seleccionar": st.column_config.CheckboxColumn("Seleccionar", default=False),
                     "asset_id": None,
                 },
                 key="discovered_assets_selection_editor",
+                on_change=sync_discovered_asset_selection_from_editor,
             )
 
-            selected_asset_ids = edited_assets.loc[edited_assets["seleccionar"], "asset_id"].dropna().astype(str).tolist()
+            returned_selected_ids = set(edited_assets.loc[edited_assets["seleccionar"], "asset_id"].dropna().astype(str).tolist())
+            selected_state = set(st.session_state["selected_discovered_asset_ids"])
+            selected_state.difference_update(visible_asset_id_set)
+            selected_state.update(returned_selected_ids)
+            st.session_state["selected_discovered_asset_ids"] = selected_state
+            selected_asset_ids = sorted(selected_state)
             bulk_col1, bulk_col2, bulk_col3 = st.columns([1, 1, 3])
             with bulk_col1:
                 if st.button("🗑️ Eliminar seleccionados", disabled=not selected_asset_ids):
                     ok, msg = delete_discovered_assets(selected_asset_ids)
                     if ok:
+                        st.session_state["selected_discovered_asset_ids"].difference_update(selected_asset_ids)
                         st.success(msg)
                         st.rerun()
                     else:
@@ -792,6 +843,7 @@ with tab_assets:
                 if st.button("🧹 Vaciar todo", disabled=not confirm_clear):
                     ok, msg = clear_discovered_assets()
                     if ok:
+                        st.session_state["selected_discovered_asset_ids"] = set()
                         st.success(msg)
                         st.rerun()
                     else:
