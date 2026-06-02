@@ -35,7 +35,7 @@ ES_PORT = os.getenv("SIS_DASHBOARD_ELASTIC_PORT", "9200")
 REDIS_HOST = os.getenv("SIS_DASHBOARD_REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("SIS_DASHBOARD_REDIS_PORT", "6379"))
 INDEX_NAME = os.getenv("SIS_DASHBOARD_INDEX", "sis-logs-v1")
-DISCOVERED_ASSETS_INDEX = os.getenv("SIS_DASHBOARD_DISCOVERED_ASSETS_INDEX", "sis-discovered-assets-v2")
+DISCOVERED_ASSETS_INDEX = os.getenv("SIS_DASHBOARD_DISCOVERED_ASSETS_INDEX", "sis-discovered-assets-v3")
 SENSOR_HEALTH_DIR = os.getenv("SIS_SENSOR_HEALTH_DIR", "/sensor-health")
 RFC1918_NETWORKS = tuple(ipaddress.ip_network(cidr) for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 
@@ -709,18 +709,18 @@ with tab_assets:
 
     action_col, info_col = st.columns([1, 3])
     with action_col:
-        if st.button("🔁 Re-escanear redes descubiertas", type="secondary", disabled=not redes_descubiertas):
+        if st.button("🔁 Re-escanear redes locales", type="secondary"):
             if r:
                 try:
                     r.set("cmd_rescan_discovered_networks", "true")
-                    st.success(f"Orden enviada: se re-escanearán {len(redes_descubiertas)} redes descubiertas con nmap ping+ARP sweep.")
+                    st.success("Orden enviada: el sensor re-escaneará sus redes locales y cualquier red descubierta con nmap ping+ARP sweep.")
                 except Exception as e:
                     st.error(f"Error Redis: {e}")
             else:
                 st.error("No hay conexión con Redis para enviar la orden de re-escaneo.")
     with info_col:
         st.caption(
-            "Redes detectadas para re-escaneo: "
+            "Redes detectadas en la tabla (el sensor también usará sus redes locales): "
             + (", ".join(redes_descubiertas) if redes_descubiertas else "ninguna todavía")
         )
 

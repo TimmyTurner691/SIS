@@ -29,7 +29,7 @@ ELASTIC_HOST = os.getenv("ELASTIC_HOST", "elasticsearch")
 ELASTIC_PORT = int(os.getenv("ELASTIC_PORT", "9200"))
 REDIS_KEY = os.getenv("REDIS_KEY", "sis_queue")
 INDEX_NAME = os.getenv("SIS_INDEX_NAME", "sis-logs-v1")
-DISCOVERED_ASSETS_INDEX = os.getenv("SIS_DISCOVERED_ASSETS_INDEX", "sis-discovered-assets-v2")
+DISCOVERED_ASSETS_INDEX = os.getenv("SIS_DISCOVERED_ASSETS_INDEX", "sis-discovered-assets-v3")
 INVENTORY_FILE = os.getenv("SIS_INVENTORY_PATH", "/app/ot_inventory.json")
 
 IA_WINDOW_SIZE = 500
@@ -338,6 +338,7 @@ def main():
     while True:
         try:
             # --- NUEVO: CHECK DE COMANDOS DE CONTROL ---
+            discovered_assets.periodic_scan()
 
             # 1. Reset IA
             if r.exists("cmd_reset_brain"):

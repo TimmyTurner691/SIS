@@ -9,14 +9,15 @@ import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-DISCOVERED_ASSETS_INDEX = "sis-discovered-assets-v2"
+DISCOVERED_ASSETS_INDEX = "sis-discovered-assets-v3"
 DEFAULT_SWEEP_PREFIX = int(os.getenv("SIS_DISCOVERY_SWEEP_PREFIX", "24"))
 NMAP_TIMEOUT_SECONDS = int(os.getenv("SIS_DISCOVERY_NMAP_TIMEOUT", "60"))
 ACTIVE_SWEEP_ENABLED = os.getenv("SIS_DISCOVERY_ACTIVE_SWEEP", "true").lower() == "true"
+LOCAL_SWEEP_INTERVAL_SECONDS = int(os.getenv("SIS_DISCOVERY_LOCAL_SWEEP_INTERVAL", "60"))
 PURGE_LEGACY_INDEXES_ON_START = os.getenv("SIS_DISCOVERY_PURGE_LEGACY_INDEXES_ON_START", "true").lower() == "true"
 LEGACY_DISCOVERED_ASSETS_INDEXES = [
     index.strip()
-    for index in os.getenv("SIS_DISCOVERY_PURGE_LEGACY_INDEXES", "sis-discovered-assets-v1").split(",")
+    for index in os.getenv("SIS_DISCOVERY_PURGE_LEGACY_INDEXES", "sis-discovered-assets-v1,sis-discovered-assets-v2").split(",")
     if index.strip()
 ]
 
@@ -85,6 +86,70 @@ def network_for_ip(ip, prefix=DEFAULT_SWEEP_PREFIX):
     except ValueError:
         return None
 
+
+
+
+def private_networks_from_ip_addr(output, prefix=DEFAULT_SWEEP_PREFIX):
+    networks = set()
+    try:
+        rows = json.loads(output)
+    except (TypeError, ValueError):
+        return networks
+
+    for iface in rows if isinstance(rows, list) else []:
+        for addr in iface.get("addr_info", []):
+            if addr.get("family") != "inet":
+                continue
+            ip = addr.get("local")
+            if not is_private_ipv4(ip):
+                continue
+            iface_prefix = addr.get("prefixlen") or prefix
+            networks.add(network_for_ip(ip, iface_prefix))
+    return {network for network in networks if network}
+
+
+def private_networks_from_ip_route(output):
+    networks = set()
+    for line in str(output).splitlines():
+        candidate = line.split()[0] if line.split() else ""
+        try:
+            network = ipaddress.ip_network(candidate, strict=False)
+        except ValueError:
+            continue
+        if network.version == 4 and any(network.subnet_of(private_net) for private_net in RFC1918_NETWORKS):
+            networks.add(str(network))
+    return networks
+
+
+def discover_local_private_networks():
+    networks = set()
+    try:
+        result = subprocess.run(
+            ["ip", "-json", "-4", "addr", "show"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            networks.update(private_networks_from_ip_addr(result.stdout))
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    try:
+        result = subprocess.run(
+            ["ip", "-4", "route", "show", "scope", "link"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            networks.update(private_networks_from_ip_route(result.stdout))
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    return sorted(networks)
 
 def normalize_mac(value):
     if not value:
@@ -465,10 +530,12 @@ class DiscoveredAssetStore:
         self.active_sweep_enabled = active_sweep_enabled
         self._sweep_lock = threading.Lock()
         self._scheduled_networks = set()
+        self._last_local_sweep = 0
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sis-discovery")
         self.ensure_index()
         self.purge_legacy_indices()
         self.purge_non_private_ipv4_assets()
+        self.schedule_local_network_sweeps(force=True)
 
     def ensure_index(self):
         try:
@@ -563,7 +630,7 @@ class DiscoveredAssetStore:
         self._executor.submit(self._run_nmap_ping_sweep, network)
         return True
 
-    def rescan_discovered_networks(self):
+    def discovered_networks_from_index(self):
         networks = set()
         try:
             res = self.es.search(
@@ -578,14 +645,66 @@ class DiscoveredAssetStore:
                     if network:
                         networks.add(network)
         except Exception as e:
-            print(f"⚠️ No se pudieron obtener redes descubiertas para re-escaneo: {e}", flush=True)
-            return 0
+            print(f"⚠️ No se pudieron obtener redes descubiertas: {e}", flush=True)
+        return networks
 
+    def all_known_local_networks(self):
+        return sorted(self.discovered_networks_from_index() | set(discover_local_private_networks()))
+
+    def upsert_arp_neighbors(self, networks=None):
+        neighbors = collect_arp_neighbors()
+        observations = []
+        target_networks = networks or self.all_known_local_networks()
+        if target_networks:
+            for network in target_networks:
+                observations.extend(observations_from_arp_neighbors(network, neighbors))
+        else:
+            timestamp = utc_now_iso()
+            for ip, arp_data in neighbors.items():
+                if is_private_ipv4(ip):
+                    observations.append({
+                        "ip": str(ip),
+                        "mac": arp_data.get("mac"),
+                        "hostname": None,
+                        "vendor": arp_data.get("vendor"),
+                        "protocols": ["arp_discovery"],
+                        "ports": [],
+                        "last_seen": timestamp,
+                        "sources": ["arp_cache"],
+                        "os": "Equipo activo por ARP",
+                    })
+
+        count = 0
+        for observation in merge_observation_batch(observations):
+            if self.upsert_observation(observation):
+                count += 1
+        return count
+
+    def schedule_local_network_sweeps(self, force=False):
+        networks = self.all_known_local_networks()
+        arp_count = self.upsert_arp_neighbors(networks)
         scheduled = 0
-        for network in sorted(networks):
+        for network in networks:
+            if self.schedule_network_sweep(network, force=force):
+                scheduled += 1
+        print(f"🔎 Barrido local: {scheduled} redes agendadas, {arp_count} vecinos ARP registrados/actualizados.", flush=True)
+        return scheduled
+
+    def periodic_scan(self):
+        now = datetime.now(timezone.utc).timestamp()
+        if now - self._last_local_sweep < LOCAL_SWEEP_INTERVAL_SECONDS:
+            return 0
+        self._last_local_sweep = now
+        return self.schedule_local_network_sweeps(force=True)
+
+    def rescan_discovered_networks(self):
+        networks = self.all_known_local_networks()
+        arp_count = self.upsert_arp_neighbors(networks)
+        scheduled = 0
+        for network in networks:
             if self.schedule_network_sweep(network, force=True):
                 scheduled += 1
-        print(f"🔁 Re-escaneo manual solicitado: {scheduled} redes agendadas.", flush=True)
+        print(f"🔁 Re-escaneo manual solicitado: {scheduled} redes agendadas, {arp_count} vecinos ARP registrados/actualizados.", flush=True)
         return scheduled
 
     def _run_nmap_ping_sweep(self, network):
