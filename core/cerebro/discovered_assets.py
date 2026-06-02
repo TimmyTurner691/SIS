@@ -9,10 +9,16 @@ import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-DISCOVERED_ASSETS_INDEX = "sis-discovered-assets-v1"
+DISCOVERED_ASSETS_INDEX = "sis-discovered-assets-v2"
 DEFAULT_SWEEP_PREFIX = int(os.getenv("SIS_DISCOVERY_SWEEP_PREFIX", "24"))
 NMAP_TIMEOUT_SECONDS = int(os.getenv("SIS_DISCOVERY_NMAP_TIMEOUT", "60"))
 ACTIVE_SWEEP_ENABLED = os.getenv("SIS_DISCOVERY_ACTIVE_SWEEP", "true").lower() == "true"
+PURGE_LEGACY_INDEXES_ON_START = os.getenv("SIS_DISCOVERY_PURGE_LEGACY_INDEXES_ON_START", "true").lower() == "true"
+LEGACY_DISCOVERED_ASSETS_INDEXES = [
+    index.strip()
+    for index in os.getenv("SIS_DISCOVERY_PURGE_LEGACY_INDEXES", "sis-discovered-assets-v1").split(",")
+    if index.strip()
+]
 
 RFC1918_NETWORKS = tuple(
     ipaddress.ip_network(cidr)
@@ -246,15 +252,21 @@ def observations_from_event(raw_json, normalized_doc):
     return observations
 
 
+def _present_value(value):
+    if value in (None, "", "N/A", "nan", "None", "Desconocido", "OUI no registrado"):
+        return None
+    return value
+
+
 def merge_asset(existing, observation):
     now = observation.get("last_seen") or utc_now_iso()
     existing_protocols = _list_from(existing.get("protocolos_vistos"))
     existing_ports = _list_from(existing.get("puertos_observados"))
     protocols = sorted(set(existing_protocols) | set(filter(None, observation.get("protocols", []))))
     ports = sorted({_as_int(p) for p in existing_ports + observation.get("ports", []) if _as_int(p) is not None})
-    mac = observation.get("mac") or existing.get("mac")
-    hostname = observation.get("hostname") or existing.get("hostname")
-    vendor = vendor_from_mac(mac, observation.get("vendor"))
+    mac = _present_value(observation.get("mac")) or _present_value(existing.get("mac"))
+    hostname = _present_value(observation.get("hostname")) or _present_value(existing.get("hostname"))
+    vendor = vendor_from_mac(mac, _present_value(observation.get("vendor")) or _present_value(existing.get("vendor_oui")))
 
     asset = {
         "ip": observation["ip"],
@@ -455,6 +467,7 @@ class DiscoveredAssetStore:
         self._scheduled_networks = set()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sis-discovery")
         self.ensure_index()
+        self.purge_legacy_indices()
         self.purge_non_private_ipv4_assets()
 
     def ensure_index(self):
@@ -481,6 +494,19 @@ class DiscoveredAssetStore:
             }, ignore=400)
         except Exception as e:
             print(f"⚠️ No se pudo asegurar índice de activos descubiertos: {e}", flush=True)
+
+    def purge_legacy_indices(self):
+        if not PURGE_LEGACY_INDEXES_ON_START:
+            return
+        for legacy_index in LEGACY_DISCOVERED_ASSETS_INDEXES:
+            if legacy_index == self.index_name:
+                continue
+            try:
+                if self.es.indices.exists(index=legacy_index):
+                    self.es.indices.delete(index=legacy_index, ignore=[400, 404])
+                    print(f"🧹 Índice legacy de activos descubiertos eliminado para prueba limpia: {legacy_index}", flush=True)
+            except Exception as e:
+                print(f"⚠️ No se pudo eliminar índice legacy {legacy_index}: {e}", flush=True)
 
     def purge_non_private_ipv4_assets(self):
         try:

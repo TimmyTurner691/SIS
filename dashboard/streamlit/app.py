@@ -35,7 +35,7 @@ ES_PORT = os.getenv("SIS_DASHBOARD_ELASTIC_PORT", "9200")
 REDIS_HOST = os.getenv("SIS_DASHBOARD_REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("SIS_DASHBOARD_REDIS_PORT", "6379"))
 INDEX_NAME = os.getenv("SIS_DASHBOARD_INDEX", "sis-logs-v1")
-DISCOVERED_ASSETS_INDEX = os.getenv("SIS_DASHBOARD_DISCOVERED_ASSETS_INDEX", "sis-discovered-assets-v1")
+DISCOVERED_ASSETS_INDEX = os.getenv("SIS_DASHBOARD_DISCOVERED_ASSETS_INDEX", "sis-discovered-assets-v2")
 SENSOR_HEALTH_DIR = os.getenv("SIS_SENSOR_HEALTH_DIR", "/sensor-health")
 RFC1918_NETWORKS = tuple(ipaddress.ip_network(cidr) for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 
@@ -215,6 +215,39 @@ def get_discovered_assets(limit=2000):
         print(f"Error recuperando activos descubiertos: {e}")
         return pd.DataFrame(columns=cols)
 
+
+
+def delete_discovered_assets(asset_ids):
+    if not es:
+        return False, "No hay conexión con Elasticsearch."
+    clean_ids = sorted({str(asset_id) for asset_id in asset_ids if str(asset_id) not in ("", "N/A", "nan")})
+    if not clean_ids:
+        return False, "No hay activos seleccionados para eliminar."
+
+    deleted = 0
+    for asset_id in clean_ids:
+        try:
+            es.delete(index=DISCOVERED_ASSETS_INDEX, id=asset_id, ignore=[404], refresh=True)
+            deleted += 1
+        except Exception as e:
+            return False, f"Error eliminando activo {asset_id}: {e}"
+    return True, f"Activos eliminados: {deleted}."
+
+
+def clear_discovered_assets():
+    if not es:
+        return False, "No hay conexión con Elasticsearch."
+    try:
+        es.delete_by_query(
+            index=DISCOVERED_ASSETS_INDEX,
+            body={"query": {"match_all": {}}},
+            conflicts="proceed",
+            refresh=True,
+            ignore_unavailable=True,
+        )
+        return True, "Todos los activos descubiertos fueron eliminados."
+    except Exception as e:
+        return False, f"Error vaciando activos descubiertos: {e}"
 
 def load_inventory_data():
     if not os.path.exists(INVENTORY_FILE):
@@ -723,15 +756,48 @@ with tab_assets:
         if filtrado.empty:
             st.warning("No hay equipos descubiertos que coincidan con los filtros actuales.")
         else:
-            st.dataframe(
-                filtrado[[
-                    "ip", "hostname", "mac", "vendor_oui", "protocolos_vistos",
-                    "puertos_observados", "primera_vez_visto", "ultima_vez_visto",
-                    "criticidad_sugerida", "so_estimado", "fuentes", "event_count"
-                ]],
+            select_all_assets = st.checkbox("Seleccionar todos los activos filtrados", key="select_all_discovered_assets")
+            table_columns = [
+                "seleccionar", "ip", "hostname", "mac", "vendor_oui", "protocolos_vistos",
+                "puertos_observados", "primera_vez_visto", "ultima_vez_visto",
+                "criticidad_sugerida", "so_estimado", "fuentes", "event_count", "asset_id"
+            ]
+            table_df = filtrado.copy()
+            table_df.insert(0, "seleccionar", bool(select_all_assets))
+
+            edited_assets = st.data_editor(
+                table_df[table_columns],
                 use_container_width=True,
                 hide_index=True,
+                disabled=[col for col in table_columns if col != "seleccionar"],
+                column_config={
+                    "seleccionar": st.column_config.CheckboxColumn("Seleccionar", default=bool(select_all_assets)),
+                    "asset_id": None,
+                },
+                key="discovered_assets_selection_editor",
             )
+
+            selected_asset_ids = edited_assets.loc[edited_assets["seleccionar"], "asset_id"].dropna().astype(str).tolist()
+            bulk_col1, bulk_col2, bulk_col3 = st.columns([1, 1, 3])
+            with bulk_col1:
+                if st.button("🗑️ Eliminar seleccionados", disabled=not selected_asset_ids):
+                    ok, msg = delete_discovered_assets(selected_asset_ids)
+                    if ok:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+            with bulk_col2:
+                confirm_clear = st.checkbox("Confirmar vaciado", key="confirm_clear_discovered_assets")
+                if st.button("🧹 Vaciar todo", disabled=not confirm_clear):
+                    ok, msg = clear_discovered_assets()
+                    if ok:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+            with bulk_col3:
+                st.caption(f"Seleccionados: {len(selected_asset_ids)}. El vaciado total permite probar el descubrimiento desde cero.")
 
             st.subheader("Promover a inventario operativo")
             selected_ip = st.selectbox("Equipo descubierto", filtrado["ip"].tolist(), key="promote_asset_ip")
