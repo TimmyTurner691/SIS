@@ -680,7 +680,7 @@ with tab_assets:
             if r:
                 try:
                     r.set("cmd_rescan_discovered_networks", "true")
-                    st.success(f"Orden enviada: se re-escanearán {len(redes_descubiertas)} redes descubiertas con nmap ping sweep.")
+                    st.success(f"Orden enviada: se re-escanearán {len(redes_descubiertas)} redes descubiertas con nmap ping+ARP sweep.")
                 except Exception as e:
                     st.error(f"Error Redis: {e}")
             else:

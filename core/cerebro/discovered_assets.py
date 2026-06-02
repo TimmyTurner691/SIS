@@ -345,6 +345,60 @@ def enrich_observations_with_arp(observations, neighbors=None):
     return enriched
 
 
+
+
+def observations_from_arp_neighbors(network, neighbors=None):
+    try:
+        parsed_network = ipaddress.ip_network(network, strict=False)
+    except ValueError:
+        return []
+
+    neighbors = neighbors if neighbors is not None else collect_arp_neighbors()
+    timestamp = utc_now_iso()
+    observations = []
+    for ip, arp_data in neighbors.items():
+        try:
+            parsed_ip = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        if parsed_ip not in parsed_network or not is_private_ipv4(ip):
+            continue
+        observations.append({
+            "ip": str(ip),
+            "mac": arp_data.get("mac"),
+            "hostname": None,
+            "vendor": arp_data.get("vendor"),
+            "protocols": ["arp_discovery"],
+            "ports": [],
+            "last_seen": timestamp,
+            "sources": ["active_discovery", "arp_cache"],
+            "os": "Equipo activo por ARP",
+        })
+    return observations
+
+
+def merge_observation_batch(observations):
+    merged = {}
+    for observation in observations:
+        ip = observation.get("ip")
+        if not is_private_ipv4(ip):
+            continue
+        current = merged.get(ip)
+        if not current:
+            merged[ip] = dict(observation)
+            continue
+
+        current["mac"] = current.get("mac") or observation.get("mac")
+        current["hostname"] = current.get("hostname") or observation.get("hostname")
+        current["vendor"] = current.get("vendor") or observation.get("vendor")
+        current["os"] = current.get("os") or observation.get("os")
+        current["protocols"] = sorted(set(_list_from(current.get("protocols"))) | set(_list_from(observation.get("protocols"))))
+        current["ports"] = sorted({_as_int(p) for p in _list_from(current.get("ports")) + _list_from(observation.get("ports")) if _as_int(p) is not None})
+        current["sources"] = sorted(set(_list_from(current.get("sources"))) | set(_list_from(observation.get("sources"))))
+        current["last_seen"] = max(str(current.get("last_seen") or ""), str(observation.get("last_seen") or ""))
+    return list(merged.values())
+
+
 def parse_nmap_ping_sweep(xml_output):
     observations = []
     try:
@@ -479,7 +533,7 @@ class DiscoveredAssetStore:
             self._scheduled_networks.add(network)
 
         action = "Re-ejecutando" if force else "Ejecutando"
-        print(f"🧭 {action} ping sweep nmap no intrusivo sobre {network}...", flush=True)
+        print(f"🧭 {action} ping+ARP sweep nmap no intrusivo sobre {network}...", flush=True)
         self._executor.submit(self._run_nmap_ping_sweep, network)
         return True
 
@@ -509,7 +563,7 @@ class DiscoveredAssetStore:
         return scheduled
 
     def _run_nmap_ping_sweep(self, network):
-        command = ["nmap", "-sn", "-PR", "-PE", "--send-eth", "-oX", "-", network]
+        command = ["nmap", "--privileged", "-sn", "-PR", "-PE", "--send-eth", "-oX", "-", network]
         try:
             result = subprocess.run(
                 command,
@@ -522,11 +576,11 @@ class DiscoveredAssetStore:
             print("⚠️ nmap no está instalado; descubrimiento activo deshabilitado para esta ejecución.", flush=True)
             return
         except subprocess.TimeoutExpired:
-            print(f"⚠️ Timeout ejecutando ping sweep nmap sobre {network}", flush=True)
+            print(f"⚠️ Timeout ejecutando ping+ARP sweep nmap sobre {network}", flush=True)
             return
 
         if result.returncode not in (0, 1):
-            fallback_command = ["nmap", "-sn", "-PR", "-PE", "-oX", "-", network]
+            fallback_command = ["nmap", "--privileged", "-sn", "-PR", "-PE", "-oX", "-", network]
             print(f"⚠️ nmap --send-eth terminó con código {result.returncode}; reintentando sin --send-eth para {network}...", flush=True)
             try:
                 result = subprocess.run(
@@ -544,17 +598,23 @@ class DiscoveredAssetStore:
             print(f"⚠️ nmap terminó con código {result.returncode} para {network}: {result.stderr[:300]}", flush=True)
             return
 
-        observations = parse_nmap_ping_sweep(result.stdout)
-        observations = enrich_observations_with_arp(observations)
+        nmap_observations = parse_nmap_ping_sweep(result.stdout)
+        arp_neighbors = collect_arp_neighbors()
+        arp_observations = observations_from_arp_neighbors(network, arp_neighbors)
+        observations = enrich_observations_with_arp(nmap_observations, arp_neighbors)
+        observations = merge_observation_batch(observations + arp_observations)
 
         count = 0
         mac_count = 0
+        arp_count = 0
         for observation in observations:
             if self.upsert_observation(observation):
                 count += 1
                 if observation.get("mac"):
                     mac_count += 1
-        print(f"✅ Ping sweep completado en {network}: {count} equipos activos registrados/actualizados ({mac_count} con MAC).", flush=True)
+                if "arp_discovery" in observation.get("protocols", []):
+                    arp_count += 1
+        print(f"✅ Ping+ARP sweep completado en {network}: {count} equipos activos registrados/actualizados ({mac_count} con MAC, {arp_count} vía ARP).", flush=True)
 
     def process_event(self, raw_json, normalized_doc):
         updated = []
