@@ -28,10 +28,13 @@ services:
       SIS_CAPTURE_INTERFACE: ${SIS_CAPTURE_INTERFACE:-lo}
       SIS_SENSOR_MODE: ${SIS_SENSOR_MODE:-demo}
       SIS_SENSOR_PROMISCUOUS: ${SIS_SENSOR_PROMISCUOUS:-true}
+      SIS_SIGNATURE_ACTIVE_RULES_PATH: /etc/snort/rules/active.rules
+      SIS_SIGNATURE_RELOAD_PATH: /etc/snort/reload_request.json
     volumes:
       - ${SIS_SNORT_LOGS_PATH:-./logs/logs_snort}:/var/log/snort
       - ${SIS_SNORT_CONF_PATH:-./configuracion/snort/snort.conf}:/etc/snort/snort.conf:ro
       - ${SIS_SNORT_RULES_PATH:-./reglas_firmas/snort_rules}:/etc/snort/rules:ro
+      - ${SIS_SIGNATURE_RELOAD_PATH:-./reglas_firmas/reload_request.json}:/etc/snort/reload_request.json:ro
       - ${SIS_SENSOR_HEALTH_PATH:-./logs/sensor_health}:/sensor-health
     restart: unless-stopped
     security_opt:
@@ -131,8 +134,13 @@ services:
       SIS_DASHBOARD_REPORT_PATH: ${SIS_DASHBOARD_REPORT_PATH:-/app/cve_report.csv}
       SIS_DASHBOARD_SCANNER_SCRIPT: ${SIS_DASHBOARD_SCANNER_SCRIPT:-/python_core/vuln_scanner.py}
       SIS_SENSOR_HEALTH_DIR: /sensor-health
+      SIS_SIGNATURE_CATALOG_PATH: /signature-rules/signature_catalog.json
+      SIS_SIGNATURE_STATE_PATH: /signature-rules/enabled_packages.json
+      SIS_SIGNATURE_ACTIVE_RULES_PATH: /signature-rules/snort_rules/active.rules
+      SIS_SIGNATURE_RELOAD_PATH: /signature-rules/reload_request.json
     volumes:
       - ./dashboard/streamlit:/app
+      - ./reglas_firmas:/signature-rules
       - ${SIS_SNORT_LOGS_PATH:-./logs/logs_snort}:/var/log/snort:ro
       - ${SIS_ZEEK_LIVE_LOGS_PATH:-./logs/logs_zeek/logs/live}:/var/log/zeek:ro
       - ./core/cerebro:/python_core:ro

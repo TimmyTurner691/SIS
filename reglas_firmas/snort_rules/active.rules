@@ -1,0 +1,23 @@
+# SIS active.rules generado automáticamente
+# updated_at: 2026-06-02T15:52:14.908137+00:00
+# enabled_packages: dns, iec104, modbus, otros, web
+
+# --- Paquete: DNS (dns) ---
+alert udp any any -> any 53 (msg:"SIS DNS consulta sospechosa .onion"; content:"|05|onion"; nocase; sid:1000601; rev:1;)
+alert udp any any -> any 53 (msg:"SIS DNS posible túnel largo"; dsize:>200; sid:1000602; rev:1;)
+
+# --- Paquete: IEC-104 (iec104) ---
+alert tcp any any -> any 2404 (msg:"SIS IEC-104 APDU detectada"; content:"|68|"; depth:1; sid:1000001; rev:2;)
+alert tcp any any -> any 2404 (msg:"SIS IEC-104 posible DoS SYN"; flags:S; sid:1000003; rev:2;)
+
+# --- Paquete: Modbus (modbus) ---
+alert tcp any any -> any 502 (msg:"SIS Modbus/TCP función write single coil"; content:"|00 05|"; offset:7; depth:2; sid:1000101; rev:1;)
+alert tcp any any -> any 502 (msg:"SIS Modbus/TCP función write multiple registers"; content:"|00 10|"; offset:7; depth:2; sid:1000102; rev:1;)
+
+# --- Paquete: Otros (otros) ---
+alert icmp any any -> any any (msg:"[TEST] Ping Detectado en WiFi"; sid:1000005; rev:2;)
+
+# --- Paquete: Web (web) ---
+alert tcp any any -> any $HTTP_PORTS (msg:"SIS Web SQL injection básica"; content:"union select"; nocase; sid:1000501; rev:1;)
+alert tcp any any -> any $HTTP_PORTS (msg:"SIS Web acceso a /etc/passwd"; content:"/etc/passwd"; nocase; sid:1000502; rev:1;)
+alert tcp any any -> any any (msg:"SIS exploit genérico detectado"; content:"exploit"; nocase; sid:1000002; rev:2;)
