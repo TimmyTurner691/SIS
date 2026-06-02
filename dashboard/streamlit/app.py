@@ -34,6 +34,7 @@ ES_PORT = os.getenv("SIS_DASHBOARD_ELASTIC_PORT", "9200")
 REDIS_HOST = os.getenv("SIS_DASHBOARD_REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("SIS_DASHBOARD_REDIS_PORT", "6379"))
 INDEX_NAME = os.getenv("SIS_DASHBOARD_INDEX", "sis-logs-v1")
+DISCOVERED_ASSETS_INDEX = os.getenv("SIS_DASHBOARD_DISCOVERED_ASSETS_INDEX", "sis-discovered-assets-v1")
 SENSOR_HEALTH_DIR = os.getenv("SIS_SENSOR_HEALTH_DIR", "/sensor-health")
 
 # --- CONEXIONES (ELASTIC Y REDIS) ---
@@ -146,6 +147,92 @@ def get_data(minutes=60, start=None, end=None, limit=5000):
     except Exception as e:
         print(f"Error recuperando datos: {e}")
         return pd.DataFrame(columns=cols_blindadas)
+
+
+
+def get_discovered_assets(limit=2000):
+    cols = [
+        "ip", "mac", "hostname", "vendor_oui", "protocolos_vistos",
+        "puertos_observados", "primera_vez_visto", "ultima_vez_visto",
+        "criticidad_sugerida", "so_estimado", "fuentes", "event_count", "asset_id"
+    ]
+    if not es:
+        return pd.DataFrame(columns=cols)
+
+    query = {
+        "query": {"match_all": {}},
+        "sort": [{"ultima_vez_visto": "desc"}],
+        "size": limit,
+    }
+
+    try:
+        res = es.search(index=DISCOVERED_ASSETS_INDEX, body=query, ignore_unavailable=True)
+        hits = [h.get("_source", {}) for h in res.get("hits", {}).get("hits", [])]
+        if not hits:
+            return pd.DataFrame(columns=cols)
+        df_assets = pd.DataFrame(hits)
+        for col in cols:
+            if col not in df_assets.columns:
+                df_assets[col] = "N/A"
+
+        for col in ["protocolos_vistos", "puertos_observados", "fuentes"]:
+            df_assets[col] = df_assets[col].apply(lambda x: ", ".join(map(str, x)) if isinstance(x, list) else str(x))
+
+        for col in ["primera_vez_visto", "ultima_vez_visto"]:
+            df_assets[col] = pd.to_datetime(df_assets[col], errors="coerce", utc=True)
+            df_assets[col] = df_assets[col].dt.tz_convert("America/Santiago")
+
+        df_assets["event_count"] = pd.to_numeric(df_assets["event_count"], errors="coerce").fillna(0).astype(int)
+        return df_assets[cols]
+    except Exception as e:
+        print(f"Error recuperando activos descubiertos: {e}")
+        return pd.DataFrame(columns=cols)
+
+
+def load_inventory_data():
+    if not os.path.exists(INVENTORY_FILE):
+        return []
+    try:
+        with open(INVENTORY_FILE, "r") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def save_inventory_data(data):
+    with open(INVENTORY_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
+
+def promote_discovered_asset(asset):
+    inventory_data = load_inventory_data()
+    ip = str(asset.get("ip", "")).strip()
+    if not ip:
+        return False, "Activo sin IP válida."
+
+    default_name = asset.get("hostname") if asset.get("hostname") not in (None, "", "N/A") else f"Descubierto_{ip}"
+    promoted = {
+        "ip": ip,
+        "name": default_name,
+        "criticality": asset.get("criticidad_sugerida", "LOW"),
+        "source": "discovered_assets",
+        "mac": asset.get("mac", "N/A"),
+        "vendor": asset.get("vendor_oui", "Desconocido"),
+        "os_estimate": asset.get("so_estimado", "Sin evidencia suficiente"),
+    }
+
+    replaced = False
+    for idx, item in enumerate(inventory_data):
+        if item.get("ip") == ip:
+            inventory_data[idx] = {**item, **promoted}
+            replaced = True
+            break
+    if not replaced:
+        inventory_data.append(promoted)
+
+    save_inventory_data(inventory_data)
+    return True, "Activo actualizado en inventario." if replaced else "Activo promovido al inventario."
 
 def lógica_interpretar_scada_fallback(row):
     val_backend = str(row.get('comando_humano', 'N/A'))
@@ -444,8 +531,8 @@ else:
 # ==========================================
 # PESTAÑAS Y VISUALIZACIÓN (Sin cambios abajo)
 # ==========================================
-tab_risk, tab_snort, tab_net, tab_ot, tab_vuln, tab_raw = st.tabs([
-    "🚨 Fusión de Riesgos", "🛡️ IDS", "🌐 Red", "🏭 SCADA", "⚠️ Vulnerabilidades", "📝 Logs Raw"
+tab_risk, tab_snort, tab_net, tab_ot, tab_assets, tab_vuln, tab_raw = st.tabs([
+    "🚨 Fusión de Riesgos", "🛡️ IDS", "🌐 Red", "🏭 SCADA", "🧭 Equipos Descubiertos", "⚠️ Vulnerabilidades", "📝 Logs Raw"
 ])
 
 # ---------------- PESTAÑA 1: RIESGOS ----------------
@@ -546,6 +633,69 @@ with tab_ot:
             st.info("🏭 Esperando tráfico industrial...")
     else:
         st.info("🏭 Esperando datos...")
+
+
+# Pestaña Equipos Descubiertos
+with tab_assets:
+    st.header("🧭 Equipos Descubiertos")
+    st.caption("Activos consolidados automáticamente desde tráfico Zeek, alertas IDS y otras fuentes observadas.")
+
+    df_assets = get_discovered_assets()
+    if df_assets.empty:
+        st.info("Aún no hay equipos descubiertos. Se poblarán automáticamente cuando llegue tráfico nuevo.")
+    else:
+        c1, c2, c3 = st.columns([2, 1, 1])
+        with c1:
+            filtro_texto = st.text_input("Filtrar por IP, hostname, MAC, fabricante o SO", key="asset_filter_text")
+        with c2:
+            criticidades = sorted([x for x in df_assets["criticidad_sugerida"].dropna().unique().tolist() if x != "N/A"])
+            filtro_crit = st.multiselect("Criticidad sugerida", criticidades, default=criticidades, key="asset_filter_crit")
+        with c3:
+            protocolos = sorted({p.strip() for value in df_assets["protocolos_vistos"].dropna() for p in str(value).split(",") if p.strip()})
+            filtro_proto = st.multiselect("Protocolos", protocolos, key="asset_filter_proto")
+
+        filtrado = df_assets.copy()
+        if filtro_texto:
+            needle = filtro_texto.lower().strip()
+            mask = filtrado.apply(lambda row: needle in " ".join(map(str, row.values)).lower(), axis=1)
+            filtrado = filtrado[mask]
+        if filtro_crit:
+            filtrado = filtrado[filtrado["criticidad_sugerida"].isin(filtro_crit)]
+        if filtro_proto:
+            filtrado = filtrado[filtrado["protocolos_vistos"].apply(lambda value: any(proto in str(value) for proto in filtro_proto))]
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Equipos", len(filtrado))
+        k2.metric("Críticos sugeridos", len(filtrado[filtrado["criticidad_sugerida"] == "CRITICAL"]))
+        k3.metric("Con MAC", len(filtrado[filtrado["mac"].astype(str) != "N/A"]))
+        k4.metric("Con hostname", len(filtrado[filtrado["hostname"].astype(str) != "N/A"]))
+
+        if filtrado.empty:
+            st.warning("No hay equipos descubiertos que coincidan con los filtros actuales.")
+        else:
+            st.dataframe(
+                filtrado[[
+                    "ip", "hostname", "mac", "vendor_oui", "protocolos_vistos",
+                    "puertos_observados", "primera_vez_visto", "ultima_vez_visto",
+                    "criticidad_sugerida", "so_estimado", "fuentes", "event_count"
+                ]],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            st.subheader("Promover a inventario operativo")
+            selected_ip = st.selectbox("Equipo descubierto", filtrado["ip"].tolist(), key="promote_asset_ip")
+            selected_asset = filtrado[filtrado["ip"] == selected_ip].iloc[0].to_dict()
+            st.caption(f"Se copiará como activo gestionado con nombre '{selected_asset.get('hostname') if selected_asset.get('hostname') != 'N/A' else 'Descubierto_' + selected_ip}' y criticidad {selected_asset.get('criticidad_sugerida', 'LOW')}.")
+            if st.button("➕ Promover al inventario", type="primary"):
+                try:
+                    ok, msg = promote_discovered_asset(selected_asset)
+                    if ok:
+                        st.success(msg)
+                    else:
+                        st.error(msg)
+                except Exception as e:
+                    st.error(f"No se pudo promover el activo: {e}")
 
 # Pestaña Vuln
 with tab_vuln:
