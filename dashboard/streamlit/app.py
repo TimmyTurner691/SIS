@@ -64,16 +64,6 @@ def is_private_ipv4_address(value):
     return last_octet not in {0, 255}
 
 
-def network_for_private_ipv4_address(value, prefix=24):
-    if not is_private_ipv4_address(value):
-        return None
-    try:
-        prefix = min(max(int(prefix), 24), 30)
-        return str(ipaddress.ip_network(f"{value}/{prefix}", strict=False))
-    except ValueError:
-        return None
-
-
 def _sensor_status(sensor_name):
     file_path = Path(SENSOR_HEALTH_DIR) / f"{sensor_name}.json"
     if not file_path.exists():
@@ -293,11 +283,10 @@ def save_inventory_data(data):
         json.dump(data, f, indent=4)
 
 
-def promote_discovered_asset(asset):
-    inventory_data = load_inventory_data()
+def _promote_asset_in_inventory(inventory_data, asset):
     ip = str(asset.get("ip", "")).strip()
     if not is_private_ipv4_address(ip):
-        return False, "Solo se pueden promover activos con IPv4 privada."
+        return False, False
 
     default_name = asset.get("hostname") if asset.get("hostname") not in (None, "", "N/A") else f"Descubierto_{ip}"
     promoted = {
@@ -310,17 +299,66 @@ def promote_discovered_asset(asset):
         "os_estimate": asset.get("so_estimado", "Sin evidencia suficiente"),
     }
 
-    replaced = False
     for idx, item in enumerate(inventory_data):
         if item.get("ip") == ip:
             inventory_data[idx] = {**item, **promoted}
-            replaced = True
-            break
-    if not replaced:
-        inventory_data.append(promoted)
+            return True, True
+
+    inventory_data.append(promoted)
+    return True, False
+
+
+def promote_discovered_asset(asset):
+    inventory_data = load_inventory_data()
+    promoted, replaced = _promote_asset_in_inventory(inventory_data, asset)
+    if not promoted:
+        return False, "Solo se pueden promover activos con IPv4 privada."
 
     save_inventory_data(inventory_data)
     return True, "Activo actualizado en inventario." if replaced else "Activo promovido al inventario."
+
+
+def promote_discovered_assets(assets):
+    inventory_data = load_inventory_data()
+    promoted_count = 0
+    updated_count = 0
+    skipped_count = 0
+
+    for asset in assets:
+        promoted, replaced = _promote_asset_in_inventory(inventory_data, asset)
+        if not promoted:
+            skipped_count += 1
+            continue
+        promoted_count += 1
+        updated_count += int(replaced)
+
+    if not promoted_count:
+        return False, "No se pudo promover ningún activo seleccionado con IPv4 privada."
+
+    save_inventory_data(inventory_data)
+    created_count = promoted_count - updated_count
+    message = f"Activos promovidos: {promoted_count} ({created_count} nuevos, {updated_count} actualizados)."
+    if skipped_count:
+        message += f" Omitidos por IP inválida o no privada: {skipped_count}."
+    return True, message
+
+
+@st.dialog("Confirmar vaciado")
+def confirm_clear_discovered_assets_dialog():
+    st.write("¿Quieres eliminar todos los equipos descubiertos?")
+    confirm_col, cancel_col = st.columns(2)
+    with confirm_col:
+        if st.button("Sí", type="primary", use_container_width=True):
+            ok, msg = clear_discovered_assets()
+            if ok:
+                st.session_state["selected_discovered_asset_ids"] = set()
+                st.session_state["discovered_assets_notice"] = ("success", msg)
+                st.rerun()
+            else:
+                st.error(msg)
+    with cancel_col:
+        if st.button("Cancelar", use_container_width=True):
+            st.rerun()
 
 def lógica_interpretar_scada_fallback(row):
     val_backend = str(row.get('comando_humano', 'N/A'))
@@ -726,31 +764,22 @@ with tab_ot:
 # Pestaña Equipos Descubiertos
 with tab_assets:
     st.header("🧭 Equipos Descubiertos")
-    st.caption("Activos consolidados automáticamente desde tráfico Zeek, alertas IDS y otras fuentes observadas.")
+
+    notice = st.session_state.pop("discovered_assets_notice", None)
+    if notice:
+        notice_type, notice_message = notice
+        getattr(st, notice_type)(notice_message)
 
     df_assets = get_discovered_assets()
-    redes_descubiertas = sorted({
-        network
-        for ip in df_assets.get("ip", pd.Series(dtype=str)).astype(str)
-        if (network := network_for_private_ipv4_address(ip))
-    })
-
-    action_col, info_col = st.columns([1, 3])
-    with action_col:
-        if st.button("🔁 Re-escanear redes locales", type="secondary"):
-            if r:
-                try:
-                    r.set("cmd_rescan_discovered_networks", "true")
-                    st.success("Orden enviada: el sensor re-escaneará sus redes locales y cualquier red descubierta con nmap ping+ARP sweep.")
-                except Exception as e:
-                    st.error(f"Error Redis: {e}")
-            else:
-                st.error("No hay conexión con Redis para enviar la orden de re-escaneo.")
-    with info_col:
-        st.caption(
-            "Redes detectadas en la tabla (el sensor también usará sus redes locales): "
-            + (", ".join(redes_descubiertas) if redes_descubiertas else "ninguna todavía")
-        )
+    if st.button("🔁 Re-escanear redes locales", type="secondary"):
+        if r:
+            try:
+                r.set("cmd_rescan_discovered_networks", "true")
+                st.success("escaneando...")
+            except Exception as e:
+                st.error(f"Error Redis: {e}")
+        else:
+            st.error("No hay conexión con Redis para enviar la orden de re-escaneo.")
 
     if df_assets.empty:
         st.info("Aún no hay equipos descubiertos. Se poblarán automáticamente cuando llegue tráfico nuevo.")
@@ -828,42 +857,31 @@ with tab_assets:
             selected_state.update(returned_selected_ids)
             st.session_state["selected_discovered_asset_ids"] = selected_state
             selected_asset_ids = sorted(selected_state)
-            bulk_col1, bulk_col2, bulk_col3 = st.columns([1, 1, 3])
+            selected_assets = df_assets[df_assets["asset_id"].astype(str).isin(selected_asset_ids)].to_dict("records")
+            bulk_col1, bulk_col2, bulk_col3 = st.columns(3)
             with bulk_col1:
-                if st.button("🗑️ Eliminar seleccionados", disabled=not selected_asset_ids):
+                if st.button("🗑️ Eliminar seleccionados", disabled=not selected_asset_ids, use_container_width=True):
                     ok, msg = delete_discovered_assets(selected_asset_ids)
                     if ok:
                         st.session_state["selected_discovered_asset_ids"].difference_update(selected_asset_ids)
-                        st.success(msg)
+                        st.session_state["discovered_assets_notice"] = ("success", msg)
                         st.rerun()
                     else:
                         st.error(msg)
             with bulk_col2:
-                confirm_clear = st.checkbox("Confirmar vaciado", key="confirm_clear_discovered_assets")
-                if st.button("🧹 Vaciar todo", disabled=not confirm_clear):
-                    ok, msg = clear_discovered_assets()
-                    if ok:
-                        st.session_state["selected_discovered_asset_ids"] = set()
-                        st.success(msg)
-                        st.rerun()
-                    else:
-                        st.error(msg)
+                if st.button("🧹 Vaciar todo", use_container_width=True):
+                    confirm_clear_discovered_assets_dialog()
             with bulk_col3:
-                st.caption(f"Seleccionados: {len(selected_asset_ids)}. El vaciado total permite probar el descubrimiento desde cero.")
-
-            st.subheader("Promover a inventario operativo")
-            selected_ip = st.selectbox("Equipo descubierto", filtrado["ip"].tolist(), key="promote_asset_ip")
-            selected_asset = filtrado[filtrado["ip"] == selected_ip].iloc[0].to_dict()
-            st.caption(f"Se copiará como activo gestionado con nombre '{selected_asset.get('hostname') if selected_asset.get('hostname') != 'N/A' else 'Descubierto_' + selected_ip}' y criticidad {selected_asset.get('criticidad_sugerida', 'LOW')}.")
-            if st.button("➕ Promover al inventario", type="primary"):
-                try:
-                    ok, msg = promote_discovered_asset(selected_asset)
-                    if ok:
-                        st.success(msg)
-                    else:
-                        st.error(msg)
-                except Exception as e:
-                    st.error(f"No se pudo promover el activo: {e}")
+                if st.button("Promover equipo", disabled=not selected_assets, type="primary", use_container_width=True):
+                    try:
+                        ok, msg = promote_discovered_assets(selected_assets)
+                        if ok:
+                            st.session_state["discovered_assets_notice"] = ("success", msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    except Exception as e:
+                        st.error(f"No se pudieron promover los activos: {e}")
 
 # Pestaña Vuln
 with tab_vuln:
