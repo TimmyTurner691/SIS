@@ -8,7 +8,6 @@ import datetime
 import ipaddress
 import os
 import json
-import subprocess
 import re
 import time
 import redis  # <--- NUEVO: Necesario para enviar comandos
@@ -28,8 +27,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 INVENTORY_FILE = os.getenv("SIS_DASHBOARD_INVENTORY_PATH", "/app/ot_inventory.json")
-REPORT_FILE = os.getenv("SIS_DASHBOARD_REPORT_PATH", "/app/cve_report.csv")
-SCANNER_SCRIPT = os.getenv("SIS_DASHBOARD_SCANNER_SCRIPT", "/python_core/vuln_scanner.py")
 ES_HOST = os.getenv("SIS_DASHBOARD_ELASTIC_HOST", "elasticsearch")
 ES_PORT = os.getenv("SIS_DASHBOARD_ELASTIC_PORT", "9200")
 REDIS_HOST = os.getenv("SIS_DASHBOARD_REDIS_HOST", "redis")
@@ -62,16 +59,6 @@ def is_private_ipv4_address(value):
         return False
     last_octet = int(str(ip).split(".")[-1])
     return last_octet not in {0, 255}
-
-
-def network_for_private_ipv4_address(value, prefix=24):
-    if not is_private_ipv4_address(value):
-        return None
-    try:
-        prefix = min(max(int(prefix), 24), 30)
-        return str(ipaddress.ip_network(f"{value}/{prefix}", strict=False))
-    except ValueError:
-        return None
 
 
 def _sensor_status(sensor_name):
@@ -293,11 +280,75 @@ def save_inventory_data(data):
         json.dump(data, f, indent=4)
 
 
-def promote_discovered_asset(asset):
+def registered_assets_dataframe(inventory_data):
+    rows = []
+    for inventory_index, asset in enumerate(inventory_data):
+        rows.append({
+            "inventory_id": str(inventory_index),
+            "ip": asset.get("ip", "N/A"),
+            "name": asset.get("name", "N/A"),
+            "type": asset.get("type", "N/A"),
+            "mac": asset.get("mac", "N/A"),
+            "vendor": asset.get("vendor", asset.get("vendor_oui", "Desconocido")),
+            "criticidad": asset.get("criticality", asset.get("criticidad", "LOW")),
+        })
+    return pd.DataFrame(rows, columns=["inventory_id", "ip", "name", "type", "mac", "vendor", "criticidad"])
+
+
+def ensure_registered_asset_selection_state():
+    if "selected_registered_asset_ids" not in st.session_state:
+        st.session_state["selected_registered_asset_ids"] = set()
+    elif not isinstance(st.session_state["selected_registered_asset_ids"], set):
+        st.session_state["selected_registered_asset_ids"] = set(st.session_state["selected_registered_asset_ids"])
+
+
+def sync_registered_asset_selection_from_editor():
+    ensure_registered_asset_selection_state()
+    editor_state = st.session_state.get("registered_assets_selection_editor", {})
+    visible_ids = st.session_state.get("registered_assets_visible_ids", [])
+    selected = set(st.session_state["selected_registered_asset_ids"])
+
+    for row_idx, changes in editor_state.get("edited_rows", {}).items():
+        try:
+            inventory_id = visible_ids[int(row_idx)]
+        except (ValueError, IndexError):
+            continue
+        if "seleccionar" not in changes:
+            continue
+        if changes["seleccionar"]:
+            selected.add(inventory_id)
+        else:
+            selected.discard(inventory_id)
+
+    st.session_state["selected_registered_asset_ids"] = selected
+
+
+def delete_registered_assets(inventory_ids):
     inventory_data = load_inventory_data()
+    selected_indices = {
+        int(inventory_id)
+        for inventory_id in inventory_ids
+        if str(inventory_id).isdigit() and int(inventory_id) < len(inventory_data)
+    }
+    if not selected_indices:
+        return False, "No hay activos registrados seleccionados para eliminar."
+
+    remaining_assets = [
+        asset
+        for inventory_index, asset in enumerate(inventory_data)
+        if inventory_index not in selected_indices
+    ]
+    try:
+        save_inventory_data(remaining_assets)
+    except Exception as e:
+        return False, f"No se pudieron eliminar los activos registrados: {e}"
+    return True, f"Activos registrados eliminados: {len(selected_indices)}."
+
+
+def _promote_asset_in_inventory(inventory_data, asset):
     ip = str(asset.get("ip", "")).strip()
     if not is_private_ipv4_address(ip):
-        return False, "Solo se pueden promover activos con IPv4 privada."
+        return False, False
 
     default_name = asset.get("hostname") if asset.get("hostname") not in (None, "", "N/A") else f"Descubierto_{ip}"
     promoted = {
@@ -310,17 +361,66 @@ def promote_discovered_asset(asset):
         "os_estimate": asset.get("so_estimado", "Sin evidencia suficiente"),
     }
 
-    replaced = False
     for idx, item in enumerate(inventory_data):
         if item.get("ip") == ip:
             inventory_data[idx] = {**item, **promoted}
-            replaced = True
-            break
-    if not replaced:
-        inventory_data.append(promoted)
+            return True, True
+
+    inventory_data.append(promoted)
+    return True, False
+
+
+def promote_discovered_asset(asset):
+    inventory_data = load_inventory_data()
+    promoted, replaced = _promote_asset_in_inventory(inventory_data, asset)
+    if not promoted:
+        return False, "Solo se pueden promover activos con IPv4 privada."
 
     save_inventory_data(inventory_data)
     return True, "Activo actualizado en inventario." if replaced else "Activo promovido al inventario."
+
+
+def promote_discovered_assets(assets):
+    inventory_data = load_inventory_data()
+    promoted_count = 0
+    updated_count = 0
+    skipped_count = 0
+
+    for asset in assets:
+        promoted, replaced = _promote_asset_in_inventory(inventory_data, asset)
+        if not promoted:
+            skipped_count += 1
+            continue
+        promoted_count += 1
+        updated_count += int(replaced)
+
+    if not promoted_count:
+        return False, "No se pudo promover ningún activo seleccionado con IPv4 privada."
+
+    save_inventory_data(inventory_data)
+    created_count = promoted_count - updated_count
+    message = f"Activos promovidos: {promoted_count} ({created_count} nuevos, {updated_count} actualizados)."
+    if skipped_count:
+        message += f" Omitidos por IP inválida o no privada: {skipped_count}."
+    return True, message
+
+
+@st.dialog("Confirmar vaciado")
+def confirm_clear_discovered_assets_dialog():
+    st.write("¿Quieres eliminar todos los equipos descubiertos?")
+    confirm_col, cancel_col = st.columns(2)
+    with confirm_col:
+        if st.button("Sí", type="primary", use_container_width=True):
+            ok, msg = clear_discovered_assets()
+            if ok:
+                st.session_state["selected_discovered_asset_ids"] = set()
+                st.session_state["discovered_assets_notice"] = ("success", msg)
+                st.rerun()
+            else:
+                st.error(msg)
+    with cancel_col:
+        if st.button("Cancelar", use_container_width=True):
+            st.rerun()
 
 def lógica_interpretar_scada_fallback(row):
     val_backend = str(row.get('comando_humano', 'N/A'))
@@ -588,7 +688,7 @@ df = pd.DataFrame()
 
 # Variables de auto-refresh
 auto_refresh = False
-refresh_rate = 5
+refresh_rate = 60
 
 if modo == "En Vivo":
     st.sidebar.markdown("### ⏱️ Control de Tiempo")
@@ -598,7 +698,7 @@ if modo == "En Vivo":
     with c_auto:
         auto_refresh = st.toggle("Auto-Refresh", value=True) 
     with c_sec:
-        refresh_rate = st.number_input("Segundos", min_value=1, max_value=60, value=2)
+        refresh_rate = st.number_input("Segundos", min_value=1, max_value=60, value=60)
 
     if st.sidebar.button("🔄 Refrescar Manual"):
         st.cache_data.clear()
@@ -619,8 +719,8 @@ else:
 # ==========================================
 # PESTAÑAS Y VISUALIZACIÓN (Sin cambios abajo)
 # ==========================================
-tab_risk, tab_snort, tab_net, tab_ot, tab_assets, tab_vuln, tab_raw = st.tabs([
-    "🚨 Fusión de Riesgos", "🛡️ IDS", "🌐 Red", "🏭 SCADA", "🧭 Equipos Descubiertos", "⚠️ Vulnerabilidades", "📝 Logs Raw"
+tab_risk, tab_snort, tab_net, tab_ot, tab_assets, tab_registered_assets, tab_raw = st.tabs([
+    "🚨 Fusión de Riesgos", "🛡️ IDS", "🌐 Red", "🏭 SCADA", "🧭 Equipos Descubiertos", "📋 Activos Registrados", "📝 Logs Raw"
 ])
 
 # ---------------- PESTAÑA 1: RIESGOS ----------------
@@ -726,31 +826,22 @@ with tab_ot:
 # Pestaña Equipos Descubiertos
 with tab_assets:
     st.header("🧭 Equipos Descubiertos")
-    st.caption("Activos consolidados automáticamente desde tráfico Zeek, alertas IDS y otras fuentes observadas.")
+
+    notice = st.session_state.pop("discovered_assets_notice", None)
+    if notice:
+        notice_type, notice_message = notice
+        getattr(st, notice_type)(notice_message)
 
     df_assets = get_discovered_assets()
-    redes_descubiertas = sorted({
-        network
-        for ip in df_assets.get("ip", pd.Series(dtype=str)).astype(str)
-        if (network := network_for_private_ipv4_address(ip))
-    })
-
-    action_col, info_col = st.columns([1, 3])
-    with action_col:
-        if st.button("🔁 Re-escanear redes locales", type="secondary"):
-            if r:
-                try:
-                    r.set("cmd_rescan_discovered_networks", "true")
-                    st.success("Orden enviada: el sensor re-escaneará sus redes locales y cualquier red descubierta con nmap ping+ARP sweep.")
-                except Exception as e:
-                    st.error(f"Error Redis: {e}")
-            else:
-                st.error("No hay conexión con Redis para enviar la orden de re-escaneo.")
-    with info_col:
-        st.caption(
-            "Redes detectadas en la tabla (el sensor también usará sus redes locales): "
-            + (", ".join(redes_descubiertas) if redes_descubiertas else "ninguna todavía")
-        )
+    if st.button("🔁 Re-escanear redes locales", type="secondary"):
+        if r:
+            try:
+                r.set("cmd_rescan_discovered_networks", "true")
+                st.success("escaneando...")
+            except Exception as e:
+                st.error(f"Error Redis: {e}")
+        else:
+            st.error("No hay conexión con Redis para enviar la orden de re-escaneo.")
 
     if df_assets.empty:
         st.info("Aún no hay equipos descubiertos. Se poblarán automáticamente cuando llegue tráfico nuevo.")
@@ -828,102 +919,133 @@ with tab_assets:
             selected_state.update(returned_selected_ids)
             st.session_state["selected_discovered_asset_ids"] = selected_state
             selected_asset_ids = sorted(selected_state)
-            bulk_col1, bulk_col2, bulk_col3 = st.columns([1, 1, 3])
+            selected_assets = df_assets[df_assets["asset_id"].astype(str).isin(selected_asset_ids)].to_dict("records")
+            bulk_col1, bulk_col2, bulk_col3 = st.columns(3)
             with bulk_col1:
-                if st.button("🗑️ Eliminar seleccionados", disabled=not selected_asset_ids):
+                if st.button("🗑️ Eliminar seleccionados", disabled=not selected_asset_ids, use_container_width=True):
                     ok, msg = delete_discovered_assets(selected_asset_ids)
                     if ok:
                         st.session_state["selected_discovered_asset_ids"].difference_update(selected_asset_ids)
-                        st.success(msg)
+                        st.session_state["discovered_assets_notice"] = ("success", msg)
                         st.rerun()
                     else:
                         st.error(msg)
             with bulk_col2:
-                confirm_clear = st.checkbox("Confirmar vaciado", key="confirm_clear_discovered_assets")
-                if st.button("🧹 Vaciar todo", disabled=not confirm_clear):
-                    ok, msg = clear_discovered_assets()
-                    if ok:
-                        st.session_state["selected_discovered_asset_ids"] = set()
-                        st.success(msg)
-                        st.rerun()
-                    else:
-                        st.error(msg)
+                if st.button("🧹 Vaciar todo", use_container_width=True):
+                    confirm_clear_discovered_assets_dialog()
             with bulk_col3:
-                st.caption(f"Seleccionados: {len(selected_asset_ids)}. El vaciado total permite probar el descubrimiento desde cero.")
+                if st.button("Promover equipo", disabled=not selected_assets, type="primary", use_container_width=True):
+                    try:
+                        ok, msg = promote_discovered_assets(selected_assets)
+                        if ok:
+                            st.session_state["discovered_assets_notice"] = ("success", msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    except Exception as e:
+                        st.error(f"No se pudieron promover los activos: {e}")
 
-            st.subheader("Promover a inventario operativo")
-            selected_ip = st.selectbox("Equipo descubierto", filtrado["ip"].tolist(), key="promote_asset_ip")
-            selected_asset = filtrado[filtrado["ip"] == selected_ip].iloc[0].to_dict()
-            st.caption(f"Se copiará como activo gestionado con nombre '{selected_asset.get('hostname') if selected_asset.get('hostname') != 'N/A' else 'Descubierto_' + selected_ip}' y criticidad {selected_asset.get('criticidad_sugerida', 'LOW')}.")
-            if st.button("➕ Promover al inventario", type="primary"):
-                try:
-                    ok, msg = promote_discovered_asset(selected_asset)
-                    if ok:
-                        st.success(msg)
-                    else:
-                        st.error(msg)
-                except Exception as e:
-                    st.error(f"No se pudo promover el activo: {e}")
+# Pestaña Activos Registrados
+with tab_registered_assets:
+    st.header("📋 Activos Registrados")
 
-# Pestaña Vuln
-with tab_vuln:
-    st.header("🛡️ Gestión de Vulnerabilidades")
-    c1, c2 = st.columns([1, 2])
-    
-    with c1:
-        st.subheader("📦 Inventario Operativo")
-        with st.form("form_add_asset", clear_on_submit=True):
-            st.markdown("#### ➕ Agregar Nuevo Activo")
-            new_ip = st.text_input("Dirección IP", placeholder="Ej: 192.168.1.50")
-            new_name = st.text_input("Nombre del Dispositivo", placeholder="Ej: PLC_Hornos")
-            new_crit = st.selectbox("Nivel de Criticidad", ["LOW", "MEDIUM", "HIGH", "CRITICAL"])
-            
-            submitted = st.form_submit_button("💾 Guardar Activo")
-            if submitted and new_ip and new_name:
-                try:
-                    current_data = []
-                    if os.path.exists(INVENTORY_FILE):
-                        with open(INVENTORY_FILE, 'r') as f:
-                            try: current_data = json.loads(f.read())
-                            except: pass
-                    
-                    current_data = [x for x in current_data if x.get('ip') != new_ip.strip()]
-                    current_data.append({"ip": new_ip.strip(), "name": new_name.strip(), "criticality": new_crit})
-                    
-                    with open(INVENTORY_FILE, 'w') as f: json.dump(current_data, f, indent=4)
-                    st.success(f"✅ Guardado: {new_name}")
-                except Exception as e: st.error(f"❌ Error: {e}")
+    notice = st.session_state.pop("registered_assets_notice", None)
+    if notice:
+        notice_type, notice_message = notice
+        getattr(st, notice_type)(notice_message)
 
-        st.divider()
-        st.markdown("#### 📋 Activos Registrados")
-        if os.path.exists(INVENTORY_FILE):
-            try:
-                with open(INVENTORY_FILE, 'r') as f:
-                    inventory_data = json.load(f)
-                if inventory_data:
-                    st.dataframe(pd.DataFrame(inventory_data), use_container_width=True, hide_index=True)
-                else: st.info("Inventario vacío.")
-            except: st.warning("Error leyendo inventario.")
+    inventory_data = load_inventory_data()
+    registered_assets = registered_assets_dataframe(inventory_data)
+    if registered_assets.empty:
+        st.info("No hay activos registrados.")
+    else:
+        registered_filter = st.text_input(
+            "Filtrar por IP, nombre, tipo, MAC, fabricante o criticidad",
+            key="registered_asset_filter_text",
+        )
+        filtered_registered_assets = registered_assets.copy()
+        if registered_filter:
+            needle = registered_filter.lower().strip()
+            searchable_columns = ["ip", "name", "type", "mac", "vendor", "criticidad"]
+            mask = filtered_registered_assets[searchable_columns].apply(
+                lambda row: needle in " ".join(map(str, row.values)).lower(),
+                axis=1,
+            )
+            filtered_registered_assets = filtered_registered_assets[mask]
 
-    with c2:
-        st.subheader("🔍 Escáner de Vulnerabilidades (CVEs)")
-        if st.button("🚀 Iniciar Escaneo", type="primary"):
-            with st.spinner("Escaneando activos..."):
-                try:
-                    subprocess.run(["python3", SCANNER_SCRIPT], check=False)
-                    st.success("Escaneo finalizado.")
-                    st.cache_data.clear()
-                except Exception as e: st.error(f"Error: {e}")
-        
-        if os.path.exists(REPORT_FILE):
-            try:
-                df_cve = pd.read_csv(REPORT_FILE, on_bad_lines='skip')
-                if not df_cve.empty:
-                    df_cve.columns = [c.lower().strip() for c in df_cve.columns]
-                    st.dataframe(df_cve, use_container_width=True)
-                else: st.info("✅ Reporte vacío.")
-            except: st.error("Error leyendo reporte.")
-        else: st.info("ℹ️ Sin reportes.")
+        if filtered_registered_assets.empty:
+            st.warning("No hay activos registrados que coincidan con el filtro actual.")
+        else:
+            ensure_registered_asset_selection_state()
+            all_registered_ids = set(registered_assets["inventory_id"].astype(str))
+            selected_state = set(st.session_state["selected_registered_asset_ids"])
+            selected_state.intersection_update(all_registered_ids)
+            st.session_state["selected_registered_asset_ids"] = selected_state
+
+            visible_registered_ids = filtered_registered_assets["inventory_id"].astype(str).tolist()
+            visible_registered_id_set = set(visible_registered_ids)
+            st.session_state["registered_assets_visible_ids"] = visible_registered_ids
+
+            if st.session_state.pop("_reset_registered_select_all", False):
+                st.session_state["select_all_registered_assets"] = False
+                st.session_state["_previous_select_all_registered_assets"] = False
+
+            select_all_registered = st.checkbox(
+                "Seleccionar todos los activos registrados filtrados",
+                key="select_all_registered_assets",
+            )
+            previous_select_all = st.session_state.get("_previous_select_all_registered_assets", False)
+            if select_all_registered != previous_select_all:
+                selected_state = set(st.session_state["selected_registered_asset_ids"])
+                if select_all_registered:
+                    selected_state.update(visible_registered_id_set)
+                else:
+                    selected_state.difference_update(visible_registered_id_set)
+                st.session_state["selected_registered_asset_ids"] = selected_state
+                st.session_state["_previous_select_all_registered_assets"] = select_all_registered
+
+            table_df = filtered_registered_assets.copy()
+            selected_state = set(st.session_state["selected_registered_asset_ids"])
+            table_df.insert(0, "seleccionar", table_df["inventory_id"].astype(str).isin(selected_state))
+            table_columns = ["seleccionar", "ip", "name", "type", "mac", "vendor", "criticidad", "inventory_id"]
+
+            edited_registered_assets = st.data_editor(
+                table_df[table_columns],
+                width="stretch",
+                hide_index=True,
+                disabled=[column for column in table_columns if column != "seleccionar"],
+                column_config={
+                    "seleccionar": st.column_config.CheckboxColumn("Seleccionar", default=False),
+                    "inventory_id": None,
+                },
+                key="registered_assets_selection_editor",
+                on_change=sync_registered_asset_selection_from_editor,
+            )
+
+            returned_selected_ids = set(
+                edited_registered_assets.loc[
+                    edited_registered_assets["seleccionar"], "inventory_id"
+                ].astype(str)
+            )
+            selected_state = set(st.session_state["selected_registered_asset_ids"])
+            selected_state.difference_update(visible_registered_id_set)
+            selected_state.update(returned_selected_ids)
+            st.session_state["selected_registered_asset_ids"] = selected_state
+            selected_registered_ids = sorted(selected_state)
+
+            if st.button(
+                "🗑️ Eliminar seleccionados",
+                disabled=not selected_registered_ids,
+                key="delete_selected_registered_assets",
+            ):
+                ok, msg = delete_registered_assets(selected_registered_ids)
+                if ok:
+                    st.session_state["selected_registered_asset_ids"] = set()
+                    st.session_state["_reset_registered_select_all"] = True
+                    st.session_state["registered_assets_notice"] = ("success", msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
 
 # Pestaña Raw
 with tab_raw:

@@ -141,18 +141,14 @@ services:
       SIS_DASHBOARD_INDEX: ${SIS_INDEX_NAME:-sis-logs-v1}
       SIS_DASHBOARD_DISCOVERED_ASSETS_INDEX: ${SIS_DISCOVERED_ASSETS_INDEX:-sis-discovered-assets-v3}
       SIS_DASHBOARD_INVENTORY_PATH: ${SIS_DASHBOARD_INVENTORY_PATH:-/app/ot_inventory.json}
-      SIS_DASHBOARD_REPORT_PATH: ${SIS_DASHBOARD_REPORT_PATH:-/app/cve_report.csv}
-      SIS_DASHBOARD_SCANNER_SCRIPT: ${SIS_DASHBOARD_SCANNER_SCRIPT:-/python_core/vuln_scanner.py}
       SIS_SENSOR_HEALTH_DIR: /sensor-health
     volumes:
       - ./dashboard/streamlit:/app
       - ${SIS_SNORT_LOGS_PATH:-./logs/logs_snort}:/var/log/snort:ro
       - ${SIS_ZEEK_LIVE_LOGS_PATH:-./logs/logs_zeek/logs/live}:/var/log/zeek:ro
-      - ./core/cerebro:/python_core:ro
       - ${SIS_SENSOR_HEALTH_PATH:-./logs/sensor_health}:/sensor-health:ro
       - ./ot_inventory.json:/app/ot_inventory.json
       - ./ot_inventory.json:/app/ot_inventory.json
-      - ./cve_report.csv:/app/cve_report.csv:ro
     ports:
       - "${SIS_MANAGEMENT_BIND_IP:-0.0.0.0}:${SIS_DASHBOARD_PORT:-8501}:${SIS_DASHBOARD_INTERNAL_PORT:-8501}"
     depends_on:
