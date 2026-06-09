@@ -5,6 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
 import datetime
+import ipaddress
 import os
 import json
 import subprocess
@@ -34,8 +35,9 @@ ES_PORT = os.getenv("SIS_DASHBOARD_ELASTIC_PORT", "9200")
 REDIS_HOST = os.getenv("SIS_DASHBOARD_REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("SIS_DASHBOARD_REDIS_PORT", "6379"))
 INDEX_NAME = os.getenv("SIS_DASHBOARD_INDEX", "sis-logs-v1")
-DISCOVERED_ASSETS_INDEX = os.getenv("SIS_DASHBOARD_DISCOVERED_ASSETS_INDEX", "sis-discovered-assets-v1")
+DISCOVERED_ASSETS_INDEX = os.getenv("SIS_DASHBOARD_DISCOVERED_ASSETS_INDEX", "sis-discovered-assets-v3")
 SENSOR_HEALTH_DIR = os.getenv("SIS_SENSOR_HEALTH_DIR", "/sensor-health")
+RFC1918_NETWORKS = tuple(ipaddress.ip_network(cidr) for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 
 # --- CONEXIONES (ELASTIC Y REDIS) ---
 try:
@@ -49,6 +51,27 @@ try:
 except Exception:
     r = None
 
+
+
+def is_private_ipv4_address(value):
+    try:
+        ip = ipaddress.ip_address(str(value))
+    except ValueError:
+        return False
+    if ip.version != 4 or not any(ip in network for network in RFC1918_NETWORKS):
+        return False
+    last_octet = int(str(ip).split(".")[-1])
+    return last_octet not in {0, 255}
+
+
+def network_for_private_ipv4_address(value, prefix=24):
+    if not is_private_ipv4_address(value):
+        return None
+    try:
+        prefix = min(max(int(prefix), 24), 30)
+        return str(ipaddress.ip_network(f"{value}/{prefix}", strict=False))
+    except ValueError:
+        return None
 
 
 def _sensor_status(sensor_name):
@@ -171,6 +194,10 @@ def get_discovered_assets(limit=2000):
         if not hits:
             return pd.DataFrame(columns=cols)
         df_assets = pd.DataFrame(hits)
+        if "ip" in df_assets.columns:
+            df_assets = df_assets[df_assets["ip"].apply(is_private_ipv4_address)]
+        if df_assets.empty:
+            return pd.DataFrame(columns=cols)
         for col in cols:
             if col not in df_assets.columns:
                 df_assets[col] = "N/A"
@@ -188,6 +215,67 @@ def get_discovered_assets(limit=2000):
         print(f"Error recuperando activos descubiertos: {e}")
         return pd.DataFrame(columns=cols)
 
+
+
+
+def ensure_discovered_asset_selection_state():
+    if "selected_discovered_asset_ids" not in st.session_state:
+        st.session_state["selected_discovered_asset_ids"] = set()
+    elif not isinstance(st.session_state["selected_discovered_asset_ids"], set):
+        st.session_state["selected_discovered_asset_ids"] = set(st.session_state["selected_discovered_asset_ids"])
+
+
+def sync_discovered_asset_selection_from_editor():
+    ensure_discovered_asset_selection_state()
+    editor_state = st.session_state.get("discovered_assets_selection_editor", {})
+    visible_ids = st.session_state.get("discovered_assets_visible_ids", [])
+    selected = set(st.session_state["selected_discovered_asset_ids"])
+
+    for row_idx, changes in editor_state.get("edited_rows", {}).items():
+        try:
+            asset_id = visible_ids[int(row_idx)]
+        except (ValueError, IndexError):
+            continue
+        if "seleccionar" not in changes:
+            continue
+        if changes["seleccionar"]:
+            selected.add(asset_id)
+        else:
+            selected.discard(asset_id)
+
+    st.session_state["selected_discovered_asset_ids"] = selected
+
+def delete_discovered_assets(asset_ids):
+    if not es:
+        return False, "No hay conexión con Elasticsearch."
+    clean_ids = sorted({str(asset_id) for asset_id in asset_ids if str(asset_id) not in ("", "N/A", "nan")})
+    if not clean_ids:
+        return False, "No hay activos seleccionados para eliminar."
+
+    deleted = 0
+    for asset_id in clean_ids:
+        try:
+            es.delete(index=DISCOVERED_ASSETS_INDEX, id=asset_id, ignore=[404], refresh=True)
+            deleted += 1
+        except Exception as e:
+            return False, f"Error eliminando activo {asset_id}: {e}"
+    return True, f"Activos eliminados: {deleted}."
+
+
+def clear_discovered_assets():
+    if not es:
+        return False, "No hay conexión con Elasticsearch."
+    try:
+        es.delete_by_query(
+            index=DISCOVERED_ASSETS_INDEX,
+            body={"query": {"match_all": {}}},
+            conflicts="proceed",
+            refresh=True,
+            ignore_unavailable=True,
+        )
+        return True, "Todos los activos descubiertos fueron eliminados."
+    except Exception as e:
+        return False, f"Error vaciando activos descubiertos: {e}"
 
 def load_inventory_data():
     if not os.path.exists(INVENTORY_FILE):
@@ -208,8 +296,8 @@ def save_inventory_data(data):
 def promote_discovered_asset(asset):
     inventory_data = load_inventory_data()
     ip = str(asset.get("ip", "")).strip()
-    if not ip:
-        return False, "Activo sin IP válida."
+    if not is_private_ipv4_address(ip):
+        return False, "Solo se pueden promover activos con IPv4 privada."
 
     default_name = asset.get("hostname") if asset.get("hostname") not in (None, "", "N/A") else f"Descubierto_{ip}"
     promoted = {
@@ -533,6 +621,8 @@ else:
 # ==========================================
 tab_risk, tab_snort, tab_net, tab_ot, tab_assets, tab_vuln, tab_raw = st.tabs([
     "🚨 Fusión de Riesgos", "🛡️ IDS", "🌐 Red", "🏭 SCADA", "🧭 Equipos Descubiertos", "⚠️ Vulnerabilidades", "📝 Logs Raw"
+tab_risk, tab_snort, tab_net, tab_ot, tab_assets, tab_vuln, tab_raw = st.tabs([
+    "🚨 Fusión de Riesgos", "🛡️ IDS", "🌐 Red", "🏭 SCADA", "🧭 Equipos Descubiertos", "⚠️ Vulnerabilidades", "📝 Logs Raw"
 ])
 
 # ---------------- PESTAÑA 1: RIESGOS ----------------
@@ -641,6 +731,29 @@ with tab_assets:
     st.caption("Activos consolidados automáticamente desde tráfico Zeek, alertas IDS y otras fuentes observadas.")
 
     df_assets = get_discovered_assets()
+    redes_descubiertas = sorted({
+        network
+        for ip in df_assets.get("ip", pd.Series(dtype=str)).astype(str)
+        if (network := network_for_private_ipv4_address(ip))
+    })
+
+    action_col, info_col = st.columns([1, 3])
+    with action_col:
+        if st.button("🔁 Re-escanear redes locales", type="secondary"):
+            if r:
+                try:
+                    r.set("cmd_rescan_discovered_networks", "true")
+                    st.success("Orden enviada: el sensor re-escaneará sus redes locales y cualquier red descubierta con nmap ping+ARP sweep.")
+                except Exception as e:
+                    st.error(f"Error Redis: {e}")
+            else:
+                st.error("No hay conexión con Redis para enviar la orden de re-escaneo.")
+    with info_col:
+        st.caption(
+            "Redes detectadas en la tabla (el sensor también usará sus redes locales): "
+            + (", ".join(redes_descubiertas) if redes_descubiertas else "ninguna todavía")
+        )
+
     if df_assets.empty:
         st.info("Aún no hay equipos descubiertos. Se poblarán automáticamente cuando llegue tráfico nuevo.")
     else:
@@ -673,15 +786,72 @@ with tab_assets:
         if filtrado.empty:
             st.warning("No hay equipos descubiertos que coincidan con los filtros actuales.")
         else:
-            st.dataframe(
-                filtrado[[
-                    "ip", "hostname", "mac", "vendor_oui", "protocolos_vistos",
-                    "puertos_observados", "primera_vez_visto", "ultima_vez_visto",
-                    "criticidad_sugerida", "so_estimado", "fuentes", "event_count"
-                ]],
+            ensure_discovered_asset_selection_state()
+            visible_asset_ids = filtrado["asset_id"].dropna().astype(str).tolist()
+            visible_asset_id_set = set(visible_asset_ids)
+            st.session_state["discovered_assets_visible_ids"] = visible_asset_ids
+
+            select_all_assets = st.checkbox("Seleccionar todos los activos filtrados", key="select_all_discovered_assets")
+            previous_select_all = st.session_state.get("_previous_select_all_discovered_assets", False)
+            if select_all_assets != previous_select_all:
+                selected_state = set(st.session_state["selected_discovered_asset_ids"])
+                if select_all_assets:
+                    selected_state.update(visible_asset_id_set)
+                else:
+                    selected_state.difference_update(visible_asset_id_set)
+                st.session_state["selected_discovered_asset_ids"] = selected_state
+                st.session_state["_previous_select_all_discovered_assets"] = select_all_assets
+
+            table_columns = [
+                "seleccionar", "ip", "hostname", "mac", "vendor_oui", "protocolos_vistos",
+                "puertos_observados", "primera_vez_visto", "ultima_vez_visto",
+                "criticidad_sugerida", "so_estimado", "fuentes", "event_count", "asset_id"
+            ]
+            table_df = filtrado.copy()
+            selected_state = set(st.session_state["selected_discovered_asset_ids"])
+            table_df.insert(0, "seleccionar", table_df["asset_id"].astype(str).isin(selected_state))
+
+            edited_assets = st.data_editor(
+                table_df[table_columns],
                 use_container_width=True,
                 hide_index=True,
+                disabled=[col for col in table_columns if col != "seleccionar"],
+                column_config={
+                    "seleccionar": st.column_config.CheckboxColumn("Seleccionar", default=False),
+                    "asset_id": None,
+                },
+                key="discovered_assets_selection_editor",
+                on_change=sync_discovered_asset_selection_from_editor,
             )
+
+            returned_selected_ids = set(edited_assets.loc[edited_assets["seleccionar"], "asset_id"].dropna().astype(str).tolist())
+            selected_state = set(st.session_state["selected_discovered_asset_ids"])
+            selected_state.difference_update(visible_asset_id_set)
+            selected_state.update(returned_selected_ids)
+            st.session_state["selected_discovered_asset_ids"] = selected_state
+            selected_asset_ids = sorted(selected_state)
+            bulk_col1, bulk_col2, bulk_col3 = st.columns([1, 1, 3])
+            with bulk_col1:
+                if st.button("🗑️ Eliminar seleccionados", disabled=not selected_asset_ids):
+                    ok, msg = delete_discovered_assets(selected_asset_ids)
+                    if ok:
+                        st.session_state["selected_discovered_asset_ids"].difference_update(selected_asset_ids)
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+            with bulk_col2:
+                confirm_clear = st.checkbox("Confirmar vaciado", key="confirm_clear_discovered_assets")
+                if st.button("🧹 Vaciar todo", disabled=not confirm_clear):
+                    ok, msg = clear_discovered_assets()
+                    if ok:
+                        st.session_state["selected_discovered_asset_ids"] = set()
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+            with bulk_col3:
+                st.caption(f"Seleccionados: {len(selected_asset_ids)}. El vaciado total permite probar el descubrimiento desde cero.")
 
             st.subheader("Promover a inventario operativo")
             selected_ip = st.selectbox("Equipo descubierto", filtrado["ip"].tolist(), key="promote_asset_ip")

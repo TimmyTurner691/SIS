@@ -13,6 +13,7 @@ from elasticsearch import Elasticsearch, helpers
 import warnings
 from elasticsearch import ElasticsearchWarning
 from discovered_assets import DiscoveredAssetStore
+from discovered_assets import DiscoveredAssetStore
 
 warnings.filterwarnings("ignore", category=ElasticsearchWarning)
 
@@ -29,7 +30,7 @@ ELASTIC_HOST = os.getenv("ELASTIC_HOST", "elasticsearch")
 ELASTIC_PORT = int(os.getenv("ELASTIC_PORT", "9200"))
 REDIS_KEY = os.getenv("REDIS_KEY", "sis_queue")
 INDEX_NAME = os.getenv("SIS_INDEX_NAME", "sis-logs-v1")
-DISCOVERED_ASSETS_INDEX = os.getenv("SIS_DISCOVERED_ASSETS_INDEX", "sis-discovered-assets-v1")
+DISCOVERED_ASSETS_INDEX = os.getenv("SIS_DISCOVERED_ASSETS_INDEX", "sis-discovered-assets-v3")
 INVENTORY_FILE = os.getenv("SIS_INVENTORY_PATH", "/app/ot_inventory.json")
 
 IA_WINDOW_SIZE = 500
@@ -38,6 +39,9 @@ BATCH_SIZE = 5000
 FLUSH_INTERVAL = 0.5    
 
 FLOOD_THRESHOLD = 100 
+DIRECT_LOG_POLL_ENABLED = os.getenv("SIS_DIRECT_LOG_POLL_ENABLED", "true").lower() == "true"
+DIRECT_LOG_POLL_INTERVAL = float(os.getenv("SIS_DIRECT_LOG_POLL_INTERVAL", "1.0"))
+DIRECT_LOG_MAX_LINES = int(os.getenv("SIS_DIRECT_LOG_MAX_LINES", "1000"))
 
 # ================= LÓGICA DE TRADUCCIÓN =================
 # ... (Sin cambios en traducir_iec104) ...
@@ -159,23 +163,44 @@ class RiskFusionEngine:
         return doc
 
 # ================= HELPER FUNCTIONS =================
+def _unique_hosts(*hosts):
+    seen = []
+    for host in hosts:
+        if host and host not in seen:
+            seen.append(host)
+    return seen
+
+
 def conectar_servicios():
     r = None; es = None
+    redis_hosts = _unique_hosts(REDIS_HOST, "127.0.0.1", "redis")
+    elastic_hosts = _unique_hosts(ELASTIC_HOST, "127.0.0.1", "elasticsearch")
+
     while not r:
-        try: r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True); r.ping(); print("✅ Redis Listo", flush=True)
-        except: time.sleep(2)
-    
+        for host in redis_hosts:
+            try:
+                candidate = redis.Redis(host=host, port=REDIS_PORT, db=0, decode_responses=True)
+                candidate.ping()
+                r = candidate
+                print(f"✅ Redis Listo ({host}:{REDIS_PORT})", flush=True)
+                break
+            except Exception as e:
+                print(f"⚠️ Redis no disponible en {host}:{REDIS_PORT} -> {e}", flush=True)
+        if not r:
+            time.sleep(2)
+
     while not es:
-        try: 
-            es = Elasticsearch([f"http://{ELASTIC_HOST}:{ELASTIC_PORT}"])
-            if es.ping():
-                print("✅ Elastic Listo", flush=True)
-            else:
-                print("⚠️ Elastic conectado pero no responde al Ping...", flush=True)
-                es = None
-                time.sleep(5)
-        except Exception as e: 
-            print(f"❌ Error conectando a http://{ELASTIC_HOST}:{ELASTIC_PORT} -> {e}", flush=True)
+        for host in elastic_hosts:
+            try:
+                candidate = Elasticsearch([f"http://{host}:{ELASTIC_PORT}"])
+                if candidate.ping():
+                    es = candidate
+                    print(f"✅ Elastic Listo ({host}:{ELASTIC_PORT})", flush=True)
+                    break
+                print(f"⚠️ Elastic conectado pero no responde al Ping en {host}:{ELASTIC_PORT}", flush=True)
+            except Exception as e:
+                print(f"❌ Error conectando a http://{host}:{ELASTIC_PORT} -> {e}", flush=True)
+        if not es:
             time.sleep(5)
     return r, es
 
@@ -220,6 +245,61 @@ def normalizar_evento(raw_json):
         return doc
     except: return None
 
+
+def _source_type_for_direct_log(path):
+    path_str = str(path)
+    if "/snort/" in path_str or path.name == "alert":
+        return "snort"
+    return "zeek"
+
+
+def _iter_direct_log_files():
+    candidates = []
+    zeek_root = Path("/var/log/zeek")
+    if zeek_root.exists():
+        patterns = ["conn.log", "dns.log", "dhcp.log", "arp.log", "*iec104*.log"]
+        for pattern in patterns:
+            candidates.extend(zeek_root.rglob(pattern))
+    snort_alert = Path("/var/log/snort/alert")
+    if snort_alert.exists():
+        candidates.append(snort_alert)
+    return sorted({path for path in candidates if path.is_file()})
+
+
+def poll_direct_source_logs(offsets, max_lines=DIRECT_LOG_MAX_LINES):
+    if not DIRECT_LOG_POLL_ENABLED:
+        return []
+
+    events = []
+    for path in _iter_direct_log_files():
+        try:
+            current_size = path.stat().st_size
+            previous_offset = offsets.get(str(path), 0)
+            if current_size < previous_offset:
+                previous_offset = 0
+
+            with path.open("r", errors="replace") as handle:
+                handle.seek(previous_offset)
+                lines_read = 0
+                while lines_read < max_lines:
+                    line = handle.readline()
+                    if not line:
+                        break
+                    lines_read += 1
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    source_type = _source_type_for_direct_log(path)
+                    events.append(json.dumps({
+                        "log": {"file": {"path": str(path)}},
+                        "fields": {"source_type": source_type},
+                        "message": line,
+                    }))
+                offsets[str(path)] = handle.tell()
+        except Exception as e:
+            print(f"⚠️ No se pudo leer log directo {path}: {e}", flush=True)
+    return events
+
 def reset_brain_state():
     model = IsolationForest(contamination=IA_CONTAMINATION, n_jobs=-1)
     stats = {'total': 0, 'snort': 0}
@@ -241,6 +321,8 @@ def reset_brain_state():
         "metrics_count": metrics_count,
         "current_eps": current_eps,
         "last_print_time": last_print_time,
+        "direct_log_offsets": {},
+        "last_direct_poll": 0,
     }
 
 
@@ -323,6 +405,7 @@ def main():
     r, es = conectar_servicios()
     engine = RiskFusionEngine()
     discovered_assets = DiscoveredAssetStore(es, DISCOVERED_ASSETS_INDEX)
+    discovered_assets = DiscoveredAssetStore(es, DISCOVERED_ASSETS_INDEX)
 
     state = reset_brain_state()
     model = state["model"]
@@ -334,10 +417,13 @@ def main():
     metrics_count = state["metrics_count"]
     current_eps = state["current_eps"]
     last_print_time = state["last_print_time"]
+    direct_log_offsets = state["direct_log_offsets"]
+    last_direct_poll = state["last_direct_poll"]
 
     while True:
         try:
             # --- NUEVO: CHECK DE COMANDOS DE CONTROL ---
+            discovered_assets.periodic_scan()
 
             # 1. Reset IA
             if r.exists("cmd_reset_brain"):
@@ -353,6 +439,8 @@ def main():
                 metrics_count = state["metrics_count"]
                 current_eps = state["current_eps"]
                 last_print_time = state["last_print_time"]
+                direct_log_offsets = state["direct_log_offsets"]
+                last_direct_poll = state["last_direct_poll"]
 
                 r.delete("cmd_reset_brain")
                 r.delete(REDIS_KEY)
@@ -374,6 +462,8 @@ def main():
                 metrics_count = state["metrics_count"]
                 current_eps = state["current_eps"]
                 last_print_time = state["last_print_time"]
+                direct_log_offsets = state["direct_log_offsets"]
+                last_direct_poll = state["last_direct_poll"]
 
                 r.delete("cmd_full_reset_demo")
 
@@ -387,6 +477,13 @@ def main():
                 is_trained = False
                 r.delete("cmd_force_train")
 
+            # 4. Re-escanear manualmente redes descubiertas
+            if r.exists("cmd_rescan_discovered_networks"):
+                print("🔁 COMANDO: Re-escaneando redes descubiertas...", flush=True)
+                scheduled = discovered_assets.rescan_discovered_networks()
+                r.set("cmd_rescan_discovered_networks_result", str(scheduled), ex=120)
+                r.delete("cmd_rescan_discovered_networks")
+
             # ------------------------------------
 
             batch_raw = []
@@ -399,6 +496,14 @@ def main():
                     item = r.lpop(REDIS_KEY)
                     if item: batch_raw.append(item)
                     else: break
+
+            now_poll = time.time()
+            if now_poll - last_direct_poll >= DIRECT_LOG_POLL_INTERVAL:
+                direct_events = poll_direct_source_logs(direct_log_offsets)
+                if direct_events:
+                    print(f"📥 Fallback directo: {len(direct_events)} eventos leídos desde logs de sensores", flush=True)
+                    batch_raw.extend(direct_events)
+                last_direct_poll = now_poll
             
             if not batch_raw:
                 item_block = r.blpop(REDIS_KEY, timeout=1)
@@ -451,6 +556,7 @@ def main():
                 if not doc: continue
                 
                 final_doc = engine.evaluar_riesgo(doc, ai_score, IS_FLOOD)
+                discovered_assets.process_event(raw_json, final_doc)
                 discovered_assets.process_event(raw_json, final_doc)
                 
                 if final_doc.get('risk_label') == 'CRÍTICO' and not IS_FLOOD:

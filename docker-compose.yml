@@ -82,17 +82,28 @@ services:
   cerebro:
     build: ./core/cerebro
     container_name: siem_cerebro
+    network_mode: "host"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     working_dir: /app
     env_file:
       - .env
     environment:
-      REDIS_HOST: ${SIS_REDIS_HOST:-redis}
+      REDIS_HOST: ${SIS_REDIS_HOST:-127.0.0.1}
       REDIS_PORT: ${SIS_REDIS_PORT:-6379}
       REDIS_KEY: ${SIS_REDIS_KEY:-sis_queue}
-      ELASTIC_HOST: ${SIS_ELASTIC_HOST:-elasticsearch}
+      ELASTIC_HOST: ${SIS_ELASTIC_HOST:-127.0.0.1}
       ELASTIC_PORT: ${SIS_ELASTIC_PORT:-9200}
       SIS_INDEX_NAME: ${SIS_INDEX_NAME:-sis-logs-v1}
-      SIS_DISCOVERED_ASSETS_INDEX: ${SIS_DISCOVERED_ASSETS_INDEX:-sis-discovered-assets-v1}
+      SIS_DISCOVERED_ASSETS_INDEX: ${SIS_DISCOVERED_ASSETS_INDEX:-sis-discovered-assets-v3}
+      SIS_DISCOVERY_ACTIVE_SWEEP: ${SIS_DISCOVERY_ACTIVE_SWEEP:-true}
+      SIS_DISCOVERY_SWEEP_PREFIX: ${SIS_DISCOVERY_SWEEP_PREFIX:-24}
+      SIS_DISCOVERY_NMAP_TIMEOUT: ${SIS_DISCOVERY_NMAP_TIMEOUT:-60}
+      SIS_DISCOVERY_PURGE_LEGACY_INDEXES_ON_START: ${SIS_DISCOVERY_PURGE_LEGACY_INDEXES_ON_START:-true}
+      SIS_DISCOVERY_PURGE_LEGACY_INDEXES: ${SIS_DISCOVERY_PURGE_LEGACY_INDEXES:-sis-discovered-assets-v1,sis-discovered-assets-v2}
+      SIS_DIRECT_LOG_POLL_ENABLED: ${SIS_DIRECT_LOG_POLL_ENABLED:-true}
+      SIS_DIRECT_LOG_POLL_INTERVAL: ${SIS_DIRECT_LOG_POLL_INTERVAL:-1.0}
       SIS_INVENTORY_PATH: ${SIS_INVENTORY_PATH:-/app/ot_inventory.json}
       SIS_SMTP_SERVER: ${SIS_SMTP_SERVER:-}
       SIS_SMTP_PORT: ${SIS_SMTP_PORT:-587}
@@ -128,7 +139,7 @@ services:
       SIS_DASHBOARD_REDIS_HOST: ${SIS_REDIS_HOST:-redis}
       SIS_DASHBOARD_REDIS_PORT: ${SIS_REDIS_PORT:-6379}
       SIS_DASHBOARD_INDEX: ${SIS_INDEX_NAME:-sis-logs-v1}
-      SIS_DASHBOARD_DISCOVERED_ASSETS_INDEX: ${SIS_DISCOVERED_ASSETS_INDEX:-sis-discovered-assets-v1}
+      SIS_DASHBOARD_DISCOVERED_ASSETS_INDEX: ${SIS_DISCOVERED_ASSETS_INDEX:-sis-discovered-assets-v3}
       SIS_DASHBOARD_INVENTORY_PATH: ${SIS_DASHBOARD_INVENTORY_PATH:-/app/ot_inventory.json}
       SIS_DASHBOARD_REPORT_PATH: ${SIS_DASHBOARD_REPORT_PATH:-/app/cve_report.csv}
       SIS_DASHBOARD_SCANNER_SCRIPT: ${SIS_DASHBOARD_SCANNER_SCRIPT:-/python_core/vuln_scanner.py}
@@ -139,6 +150,7 @@ services:
       - ${SIS_ZEEK_LIVE_LOGS_PATH:-./logs/logs_zeek/logs/live}:/var/log/zeek:ro
       - ./core/cerebro:/python_core:ro
       - ${SIS_SENSOR_HEALTH_PATH:-./logs/sensor_health}:/sensor-health:ro
+      - ./ot_inventory.json:/app/ot_inventory.json
       - ./ot_inventory.json:/app/ot_inventory.json
       - ./cve_report.csv:/app/cve_report.csv:ro
     ports:
