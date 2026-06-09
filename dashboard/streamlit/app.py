@@ -8,7 +8,6 @@ import datetime
 import ipaddress
 import os
 import json
-import subprocess
 import re
 import time
 import redis  # <--- NUEVO: Necesario para enviar comandos
@@ -28,8 +27,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 INVENTORY_FILE = os.getenv("SIS_DASHBOARD_INVENTORY_PATH", "/app/ot_inventory.json")
-REPORT_FILE = os.getenv("SIS_DASHBOARD_REPORT_PATH", "/app/cve_report.csv")
-SCANNER_SCRIPT = os.getenv("SIS_DASHBOARD_SCANNER_SCRIPT", "/python_core/vuln_scanner.py")
 ES_HOST = os.getenv("SIS_DASHBOARD_ELASTIC_HOST", "elasticsearch")
 ES_PORT = os.getenv("SIS_DASHBOARD_ELASTIC_PORT", "9200")
 REDIS_HOST = os.getenv("SIS_DASHBOARD_REDIS_HOST", "redis")
@@ -626,7 +623,7 @@ df = pd.DataFrame()
 
 # Variables de auto-refresh
 auto_refresh = False
-refresh_rate = 5
+refresh_rate = 60
 
 if modo == "En Vivo":
     st.sidebar.markdown("### ⏱️ Control de Tiempo")
@@ -636,7 +633,7 @@ if modo == "En Vivo":
     with c_auto:
         auto_refresh = st.toggle("Auto-Refresh", value=True) 
     with c_sec:
-        refresh_rate = st.number_input("Segundos", min_value=1, max_value=60, value=2)
+        refresh_rate = st.number_input("Segundos", min_value=1, max_value=60, value=60)
 
     if st.sidebar.button("🔄 Refrescar Manual"):
         st.cache_data.clear()
@@ -657,8 +654,8 @@ else:
 # ==========================================
 # PESTAÑAS Y VISUALIZACIÓN (Sin cambios abajo)
 # ==========================================
-tab_risk, tab_snort, tab_net, tab_ot, tab_assets, tab_vuln, tab_raw = st.tabs([
-    "🚨 Fusión de Riesgos", "🛡️ IDS", "🌐 Red", "🏭 SCADA", "🧭 Equipos Descubiertos", "⚠️ Vulnerabilidades", "📝 Logs Raw"
+tab_risk, tab_snort, tab_net, tab_ot, tab_assets, tab_registered_assets, tab_raw = st.tabs([
+    "🚨 Fusión de Riesgos", "🛡️ IDS", "🌐 Red", "🏭 SCADA", "🧭 Equipos Descubiertos", "📋 Activos Registrados", "📝 Logs Raw"
 ])
 
 # ---------------- PESTAÑA 1: RIESGOS ----------------
@@ -883,65 +880,15 @@ with tab_assets:
                     except Exception as e:
                         st.error(f"No se pudieron promover los activos: {e}")
 
-# Pestaña Vuln
-with tab_vuln:
-    st.header("🛡️ Gestión de Vulnerabilidades")
-    c1, c2 = st.columns([1, 2])
-    
-    with c1:
-        st.subheader("📦 Inventario Operativo")
-        with st.form("form_add_asset", clear_on_submit=True):
-            st.markdown("#### ➕ Agregar Nuevo Activo")
-            new_ip = st.text_input("Dirección IP", placeholder="Ej: 192.168.1.50")
-            new_name = st.text_input("Nombre del Dispositivo", placeholder="Ej: PLC_Hornos")
-            new_crit = st.selectbox("Nivel de Criticidad", ["LOW", "MEDIUM", "HIGH", "CRITICAL"])
-            
-            submitted = st.form_submit_button("💾 Guardar Activo")
-            if submitted and new_ip and new_name:
-                try:
-                    current_data = []
-                    if os.path.exists(INVENTORY_FILE):
-                        with open(INVENTORY_FILE, 'r') as f:
-                            try: current_data = json.loads(f.read())
-                            except: pass
-                    
-                    current_data = [x for x in current_data if x.get('ip') != new_ip.strip()]
-                    current_data.append({"ip": new_ip.strip(), "name": new_name.strip(), "criticality": new_crit})
-                    
-                    with open(INVENTORY_FILE, 'w') as f: json.dump(current_data, f, indent=4)
-                    st.success(f"✅ Guardado: {new_name}")
-                except Exception as e: st.error(f"❌ Error: {e}")
-
-        st.divider()
-        st.markdown("#### 📋 Activos Registrados")
-        if os.path.exists(INVENTORY_FILE):
-            try:
-                with open(INVENTORY_FILE, 'r') as f:
-                    inventory_data = json.load(f)
-                if inventory_data:
-                    st.dataframe(pd.DataFrame(inventory_data), use_container_width=True, hide_index=True)
-                else: st.info("Inventario vacío.")
-            except: st.warning("Error leyendo inventario.")
-
-    with c2:
-        st.subheader("🔍 Escáner de Vulnerabilidades (CVEs)")
-        if st.button("🚀 Iniciar Escaneo", type="primary"):
-            with st.spinner("Escaneando activos..."):
-                try:
-                    subprocess.run(["python3", SCANNER_SCRIPT], check=False)
-                    st.success("Escaneo finalizado.")
-                    st.cache_data.clear()
-                except Exception as e: st.error(f"Error: {e}")
-        
-        if os.path.exists(REPORT_FILE):
-            try:
-                df_cve = pd.read_csv(REPORT_FILE, on_bad_lines='skip')
-                if not df_cve.empty:
-                    df_cve.columns = [c.lower().strip() for c in df_cve.columns]
-                    st.dataframe(df_cve, use_container_width=True)
-                else: st.info("✅ Reporte vacío.")
-            except: st.error("Error leyendo reporte.")
-        else: st.info("ℹ️ Sin reportes.")
+# Pestaña Activos Registrados
+with tab_registered_assets:
+    st.header("📋 Activos Registrados")
+    inventory_data = load_inventory_data()
+    if inventory_data:
+        registered_assets = pd.DataFrame(inventory_data).reindex(columns=["ip", "name", "type"])
+        st.dataframe(registered_assets, width="stretch", hide_index=True)
+    else:
+        st.info("No hay activos registrados.")
 
 # Pestaña Raw
 with tab_raw:
