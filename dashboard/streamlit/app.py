@@ -98,7 +98,28 @@ def render_sensor_health_sidebar():
 # ==========================================
 # LÓGICA DE NEGOCIO (HELPER FUNCTIONS)
 # ==========================================
-# ... (Sin cambios en get_data, lógica_interpretar_scada_fallback, etc.) ...
+def _contains_ipv6(value):
+    text = str(value)
+    if "IPV6" in text.upper():
+        return True
+    for token in re.findall(r"[0-9A-Fa-f:]+", text):
+        if ":" not in token:
+            continue
+        try:
+            if ipaddress.ip_address(token).version == 6:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _ipv4_only_event(row):
+    return not any(
+        _contains_ipv6(row.get(field, ""))
+        for field in ("src_ip", "dst_ip", "raw_log", "message")
+    )
+
+
 def get_data(minutes=60, start=None, end=None, limit=5000):
     # Definimos las columnas obligatorias ANTES de cualquier cosa
     cols_blindadas = [
@@ -138,7 +159,12 @@ def get_data(minutes=60, start=None, end=None, limit=5000):
         for col in cols_blindadas:
             if col not in df.columns:
                 df[col] = "N/A"
-                
+
+        # Oculta también eventos IPv6 históricos que ya existan en Elasticsearch.
+        df = df[df.apply(_ipv4_only_event, axis=1)].copy()
+        if df.empty:
+            return pd.DataFrame(columns=cols_blindadas)
+
         # Conversiones numéricas
         df['risk_total_score'] = pd.to_numeric(df['risk_total_score'], errors='coerce').fillna(0)
         df['ai_score'] = pd.to_numeric(df['ai_score'], errors='coerce').fillna(0.5)

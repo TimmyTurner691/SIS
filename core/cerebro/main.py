@@ -13,7 +13,7 @@ from elasticsearch import Elasticsearch, helpers
 import warnings
 from elasticsearch import ElasticsearchWarning
 from discovered_assets import DiscoveredAssetStore
-from discovered_assets import DiscoveredAssetStore
+from event_filter import contains_ipv6
 
 warnings.filterwarnings("ignore", category=ElasticsearchWarning)
 
@@ -214,6 +214,10 @@ def normalizar_evento(raw_json):
             try: zeek_data = json.loads(message_raw)
             except: pass
         elif isinstance(message_raw, dict): zeek_data = message_raw
+
+        # SIS opera sobre telemetría IPv4. Se descarta IPv6 antes de enriquecer e indexar.
+        if contains_ipv6(message_raw) or contains_ipv6(zeek_data):
+            return None
 
         doc = {
             "@timestamp": datetime.now().isoformat(),

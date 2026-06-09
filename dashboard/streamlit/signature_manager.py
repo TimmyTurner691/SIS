@@ -12,6 +12,7 @@ from typing import Iterable
 
 RULE_RE = re.compile(r"^\s*(alert|log|pass|drop|reject|sdrop)\s+", re.IGNORECASE)
 SID_RE = re.compile(r"\bsid\s*:\s*(\d+)\s*;", re.IGNORECASE)
+FORBIDDEN_LEGACY_SIDS = {1000005}
 
 
 class SignatureError(ValueError):
@@ -58,6 +59,8 @@ def validate_rules(text: str) -> list[int]:
         if not sid_match:
             raise SignatureError(f"Línea {line_number}: falta SID")
         sid = int(sid_match.group(1))
+        if sid in FORBIDDEN_LEGACY_SIDS:
+            raise SignatureError(f"SID heredado no permitido: {sid}")
         if sid in sids:
             raise SignatureError(f"SID duplicado: {sid}")
         sids.append(sid)

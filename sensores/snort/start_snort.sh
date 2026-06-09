@@ -40,6 +40,13 @@ JSON
   mv "$RELOAD_STATUS.tmp" "$RELOAD_STATUS"
 }
 
+sanitize_rules_file() {
+  RULES_FILE="$1"
+  sed '/sid[[:space:]]*:[[:space:]]*1000005[[:space:]]*;/d; /\[TEST\] Ping Detectado en WiFi/d' \
+    "$RULES_FILE" > "$RULES_FILE.clean"
+  mv "$RULES_FILE.clean" "$RULES_FILE"
+}
+
 start_snort() {
   snort -q -i "$INTERFACE" -c /etc/snort/snort.conf -l /var/log/snort -A fast -k none $PROMISC_FLAG &
   SNORT_PID=$!
@@ -54,10 +61,11 @@ validate_and_reload() {
   VALIDATION_RULES="/etc/snort/rules/.candidate.rules"
   VALIDATION_CONF="/etc/snort/snort.validation.conf"
   cp "$CANDIDATE_RULES" "$VALIDATION_RULES"
+  sanitize_rules_file "$VALIDATION_RULES"
   sed 's@include rules/active.rules@include rules/.candidate.rules@' /etc/snort/snort.conf > "$VALIDATION_CONF"
 
   if snort -T -q -c "$VALIDATION_CONF" -i "$INTERFACE" >/tmp/snort-validation.log 2>&1; then
-    cp "$CANDIDATE_RULES" "$ACTIVE_RULES.tmp"
+    cp "$VALIDATION_RULES" "$ACTIVE_RULES.tmp"
     mv "$ACTIVE_RULES.tmp" "$ACTIVE_RULES"
     kill "$SNORT_PID" 2>/dev/null || true
     wait "$SNORT_PID" 2>/dev/null || true
@@ -82,12 +90,19 @@ if [ ! -f "$ACTIVE_RULES" ]; then
   cp "$DEFAULT_RULES" "$ACTIVE_RULES"
 fi
 
+# Elimina la firma heredada de prueba incluso si active.rules persiste en el host.
+sanitize_rules_file "$ACTIVE_RULES"
+if [ ! -s "$ACTIVE_RULES" ]; then
+  cp "$DEFAULT_RULES" "$ACTIVE_RULES"
+fi
+
 # Valida el set inicial antes de arrancar; si falla conserva active.rules.
 if [ -s "$CANDIDATE_RULES" ]; then
   cp "$CANDIDATE_RULES" /etc/snort/rules/.candidate.rules
+  sanitize_rules_file /etc/snort/rules/.candidate.rules
   sed 's@include rules/active.rules@include rules/.candidate.rules@' /etc/snort/snort.conf > /etc/snort/snort.validation.conf
   if snort -T -q -c /etc/snort/snort.validation.conf -i "$INTERFACE" >/tmp/snort-validation.log 2>&1; then
-    cp "$CANDIDATE_RULES" "$ACTIVE_RULES.tmp"
+    cp /etc/snort/rules/.candidate.rules "$ACTIVE_RULES.tmp"
     mv "$ACTIVE_RULES.tmp" "$ACTIVE_RULES"
   fi
   rm -f /etc/snort/rules/.candidate.rules /etc/snort/snort.validation.conf

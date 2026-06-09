@@ -61,6 +61,12 @@ class SignatureManagerTests(unittest.TestCase):
                 'alert tcp any any -> any 2 (msg:"B"; sid:7;)\n'
             )
 
+    def test_legacy_test_sid_is_rejected(self):
+        with self.assertRaisesRegex(SignatureError, "SID heredado no permitido"):
+            validate_rules(
+                'alert icmp any any -> any any (msg:"[TEST] Ping Detectado en WiFi"; sid:1000005;)\n'
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

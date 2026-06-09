@@ -527,3 +527,7 @@ Se recomienda agregar aquí la licencia del proyecto si se desea formalizar su d
 La pestaña **✍️ Firmas / Reglas** permite instalar, habilitar y deshabilitar los paquetes IEC-104, Modbus, IEC-61850, Windows, Linux, Web, DNS, SMB y Otros. También ofrece los perfiles **OT eléctrico**, **TI Windows**, **Linux/Web** y **Mixto liviano** como punto de partida editable.
 
 El catálogo y los perfiles viven en `reglas_firmas/catalog.json` y `reglas_firmas/profiles.json`. Al aplicar una selección, el dashboard valida la estructura y los SIDs, genera atómicamente `reglas_firmas/control/effective.rules` y solicita la recarga. El contenedor Snort ejecuta después `snort -T` sobre el candidato; solo si la validación nativa termina correctamente reemplaza `active.rules` y reinicia el proceso del sensor, sin reiniciar Redis, Elasticsearch, el núcleo ni el dashboard. Si la validación falla, conserva el set activo anterior y publica el motivo en la GUI.
+
+### Alcance IPv4 y limpieza de reglas heredadas
+
+SIS descarta eventos IPv6 durante la normalización central, antes de enriquecerlos o almacenarlos en Elasticsearch. El dashboard también excluye resultados IPv6 históricos de todas las vistas operativas. Al iniciar o recargar Snort se elimina automáticamente la antigua firma de prueba SID `1000005` (`[TEST] Ping Detectado en WiFi`) de cualquier `active.rules` persistente, sin alterar los demás paquetes seleccionados.
