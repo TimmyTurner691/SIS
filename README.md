@@ -531,3 +531,5 @@ El catálogo y los perfiles viven en `reglas_firmas/catalog.json` y `reglas_firm
 ### Alcance IPv4 y limpieza de reglas heredadas
 
 SIS descarta eventos IPv6 durante la normalización central, antes de enriquecerlos o almacenarlos en Elasticsearch. El dashboard también excluye resultados IPv6 históricos de todas las vistas operativas. Al iniciar o recargar Snort se elimina automáticamente la antigua firma de prueba SID `1000005` (`[TEST] Ping Detectado en WiFi`) de cualquier `active.rules` persistente, sin alterar los demás paquetes seleccionados.
+
+Al conectar con Elasticsearch, Cerebro elimina selectivamente los documentos históricos que contengan el SID `1000005` o el mensaje `Ping Detectado en WiFi`. La limpieza no afecta a la firma vigente `SIS ICMP detectado` (SID `1100802`).

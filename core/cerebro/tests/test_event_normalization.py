@@ -25,6 +25,24 @@ class EventNormalizationTests(unittest.TestCase):
         }
         self.assertIsNone(normalizar_evento(json.dumps(event)))
 
+    def test_legacy_test_alert_is_discarded(self):
+        event = {
+            "log": {"file": {"path": "/logs/snort/alert"}},
+            "fields": {"source_type": "snort"},
+            "message": "[**] [1:1000005:1] [TEST] Ping Detectado en WiFi [**] {ICMP} 192.168.6.243 -> 192.168.6.192",
+        }
+        self.assertIsNone(normalizar_evento(json.dumps(event)))
+
+    def test_new_sis_icmp_alert_is_preserved(self):
+        event = {
+            "log": {"file": {"path": "/logs/snort/alert"}},
+            "fields": {"source_type": "snort"},
+            "message": "[**] [1:1100802:1] SIS ICMP detectado [**] {ICMP} 192.168.6.243 -> 192.168.6.192",
+        }
+        normalized = normalizar_evento(json.dumps(event))
+        self.assertIsNotNone(normalized)
+        self.assertIn("SIS ICMP detectado", normalized["message"])
+
     def test_ipv4_event_is_preserved(self):
         event = {
             "log": {"file": {"path": "/logs/snort/alert"}},

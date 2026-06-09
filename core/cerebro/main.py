@@ -13,7 +13,7 @@ from elasticsearch import Elasticsearch, helpers
 import warnings
 from elasticsearch import ElasticsearchWarning
 from discovered_assets import DiscoveredAssetStore
-from event_filter import contains_ipv6
+from event_filter import contains_ipv6, is_legacy_test_alert
 
 warnings.filterwarnings("ignore", category=ElasticsearchWarning)
 
@@ -204,6 +204,36 @@ def conectar_servicios():
             time.sleep(5)
     return r, es
 
+def purge_legacy_test_alerts(es):
+    """Elimina de Elasticsearch únicamente la alerta ICMP heredada SID 1000005."""
+    query = {
+        "query": {
+            "bool": {
+                "should": [
+                    {"match_phrase": {"raw_log": "Ping Detectado en WiFi"}},
+                    {"match_phrase": {"message": "Ping Detectado en WiFi"}},
+                    {"query_string": {"query": "1000005", "fields": ["raw_log", "message"]}},
+                ],
+                "minimum_should_match": 1,
+            }
+        }
+    }
+    try:
+        result = es.delete_by_query(
+            index=INDEX_NAME,
+            body=query,
+            conflicts="proceed",
+            refresh=True,
+        )
+        deleted = result.get("deleted", 0)
+        if deleted:
+            print(f"🧹 Eliminadas {deleted} alertas ICMP TEST heredadas de Elasticsearch", flush=True)
+        return deleted
+    except Exception as exc:
+        print(f"⚠️ No se pudieron purgar alertas TEST históricas: {exc}", flush=True)
+        return 0
+
+
 def normalizar_evento(raw_json):
     try:
         event = json.loads(raw_json)
@@ -215,8 +245,10 @@ def normalizar_evento(raw_json):
             except: pass
         elif isinstance(message_raw, dict): zeek_data = message_raw
 
-        # SIS opera sobre telemetría IPv4. Se descarta IPv6 antes de enriquecer e indexar.
+        # Descarta ruido fuera de alcance antes de enriquecer e indexar.
         if contains_ipv6(message_raw) or contains_ipv6(zeek_data):
+            return None
+        if is_legacy_test_alert(message_raw) or is_legacy_test_alert(event):
             return None
 
         doc = {
@@ -407,6 +439,7 @@ def full_reset_demo(es, r, engine):
 def main():
     print(f"🚀 SIS Core v7.2: MONITOR DE CONSOLA ACTIVO", flush=True)
     r, es = conectar_servicios()
+    purge_legacy_test_alerts(es)
     engine = RiskFusionEngine()
     discovered_assets = DiscoveredAssetStore(es, DISCOVERED_ASSETS_INDEX)
     discovered_assets = DiscoveredAssetStore(es, DISCOVERED_ASSETS_INDEX)

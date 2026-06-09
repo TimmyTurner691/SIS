@@ -7,12 +7,14 @@ import re
 from collections.abc import Mapping
 
 _IP_TOKEN_RE = re.compile(r"[0-9A-Fa-f:]+")
+LEGACY_TEST_SID = "1000005"
+LEGACY_TEST_MESSAGE = "[TEST] Ping Detectado en WiFi"
 
 
 def is_ipv6_address(value) -> bool:
     """Indica si un valor representa una dirección IPv6 válida."""
     try:
-        return ipaddress.ip_address(str(value).strip("[](){}<>,;" )).version == 6
+        return ipaddress.ip_address(str(value).strip("[](){}<>,;")).version == 6
     except ValueError:
         return False
 
@@ -31,3 +33,18 @@ def contains_ipv6(value) -> bool:
         if ":" in token and is_ipv6_address(token):
             return True
     return False
+
+
+def is_legacy_test_alert(value) -> bool:
+    """Detecta la antigua alerta ICMP de prueba por mensaje o SID Snort."""
+    if isinstance(value, Mapping):
+        return any(is_legacy_test_alert(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(is_legacy_test_alert(item) for item in value)
+
+    text = str(value)
+    if LEGACY_TEST_MESSAGE.lower() in text.lower():
+        return True
+    if re.search(rf"\[\s*\d+\s*:\s*{LEGACY_TEST_SID}\s*:\s*\d+\s*\]", text):
+        return True
+    return bool(re.search(rf"\bsid\s*:\s*{LEGACY_TEST_SID}\s*;", text, re.IGNORECASE))
