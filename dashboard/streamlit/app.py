@@ -280,6 +280,71 @@ def save_inventory_data(data):
         json.dump(data, f, indent=4)
 
 
+def registered_assets_dataframe(inventory_data):
+    rows = []
+    for inventory_index, asset in enumerate(inventory_data):
+        rows.append({
+            "inventory_id": str(inventory_index),
+            "ip": asset.get("ip", "N/A"),
+            "name": asset.get("name", "N/A"),
+            "type": asset.get("type", "N/A"),
+            "mac": asset.get("mac", "N/A"),
+            "vendor": asset.get("vendor", asset.get("vendor_oui", "Desconocido")),
+            "criticidad": asset.get("criticality", asset.get("criticidad", "LOW")),
+        })
+    return pd.DataFrame(rows, columns=["inventory_id", "ip", "name", "type", "mac", "vendor", "criticidad"])
+
+
+def ensure_registered_asset_selection_state():
+    if "selected_registered_asset_ids" not in st.session_state:
+        st.session_state["selected_registered_asset_ids"] = set()
+    elif not isinstance(st.session_state["selected_registered_asset_ids"], set):
+        st.session_state["selected_registered_asset_ids"] = set(st.session_state["selected_registered_asset_ids"])
+
+
+def sync_registered_asset_selection_from_editor():
+    ensure_registered_asset_selection_state()
+    editor_state = st.session_state.get("registered_assets_selection_editor", {})
+    visible_ids = st.session_state.get("registered_assets_visible_ids", [])
+    selected = set(st.session_state["selected_registered_asset_ids"])
+
+    for row_idx, changes in editor_state.get("edited_rows", {}).items():
+        try:
+            inventory_id = visible_ids[int(row_idx)]
+        except (ValueError, IndexError):
+            continue
+        if "seleccionar" not in changes:
+            continue
+        if changes["seleccionar"]:
+            selected.add(inventory_id)
+        else:
+            selected.discard(inventory_id)
+
+    st.session_state["selected_registered_asset_ids"] = selected
+
+
+def delete_registered_assets(inventory_ids):
+    inventory_data = load_inventory_data()
+    selected_indices = {
+        int(inventory_id)
+        for inventory_id in inventory_ids
+        if str(inventory_id).isdigit() and int(inventory_id) < len(inventory_data)
+    }
+    if not selected_indices:
+        return False, "No hay activos registrados seleccionados para eliminar."
+
+    remaining_assets = [
+        asset
+        for inventory_index, asset in enumerate(inventory_data)
+        if inventory_index not in selected_indices
+    ]
+    try:
+        save_inventory_data(remaining_assets)
+    except Exception as e:
+        return False, f"No se pudieron eliminar los activos registrados: {e}"
+    return True, f"Activos registrados eliminados: {len(selected_indices)}."
+
+
 def _promote_asset_in_inventory(inventory_data, asset):
     ip = str(asset.get("ip", "")).strip()
     if not is_private_ipv4_address(ip):
@@ -883,12 +948,104 @@ with tab_assets:
 # Pestaña Activos Registrados
 with tab_registered_assets:
     st.header("📋 Activos Registrados")
+
+    notice = st.session_state.pop("registered_assets_notice", None)
+    if notice:
+        notice_type, notice_message = notice
+        getattr(st, notice_type)(notice_message)
+
     inventory_data = load_inventory_data()
-    if inventory_data:
-        registered_assets = pd.DataFrame(inventory_data).reindex(columns=["ip", "name", "type"])
-        st.dataframe(registered_assets, width="stretch", hide_index=True)
-    else:
+    registered_assets = registered_assets_dataframe(inventory_data)
+    if registered_assets.empty:
         st.info("No hay activos registrados.")
+    else:
+        registered_filter = st.text_input(
+            "Filtrar por IP, nombre, tipo, MAC, fabricante o criticidad",
+            key="registered_asset_filter_text",
+        )
+        filtered_registered_assets = registered_assets.copy()
+        if registered_filter:
+            needle = registered_filter.lower().strip()
+            searchable_columns = ["ip", "name", "type", "mac", "vendor", "criticidad"]
+            mask = filtered_registered_assets[searchable_columns].apply(
+                lambda row: needle in " ".join(map(str, row.values)).lower(),
+                axis=1,
+            )
+            filtered_registered_assets = filtered_registered_assets[mask]
+
+        if filtered_registered_assets.empty:
+            st.warning("No hay activos registrados que coincidan con el filtro actual.")
+        else:
+            ensure_registered_asset_selection_state()
+            all_registered_ids = set(registered_assets["inventory_id"].astype(str))
+            selected_state = set(st.session_state["selected_registered_asset_ids"])
+            selected_state.intersection_update(all_registered_ids)
+            st.session_state["selected_registered_asset_ids"] = selected_state
+
+            visible_registered_ids = filtered_registered_assets["inventory_id"].astype(str).tolist()
+            visible_registered_id_set = set(visible_registered_ids)
+            st.session_state["registered_assets_visible_ids"] = visible_registered_ids
+
+            if st.session_state.pop("_reset_registered_select_all", False):
+                st.session_state["select_all_registered_assets"] = False
+                st.session_state["_previous_select_all_registered_assets"] = False
+
+            select_all_registered = st.checkbox(
+                "Seleccionar todos los activos registrados filtrados",
+                key="select_all_registered_assets",
+            )
+            previous_select_all = st.session_state.get("_previous_select_all_registered_assets", False)
+            if select_all_registered != previous_select_all:
+                selected_state = set(st.session_state["selected_registered_asset_ids"])
+                if select_all_registered:
+                    selected_state.update(visible_registered_id_set)
+                else:
+                    selected_state.difference_update(visible_registered_id_set)
+                st.session_state["selected_registered_asset_ids"] = selected_state
+                st.session_state["_previous_select_all_registered_assets"] = select_all_registered
+
+            table_df = filtered_registered_assets.copy()
+            selected_state = set(st.session_state["selected_registered_asset_ids"])
+            table_df.insert(0, "seleccionar", table_df["inventory_id"].astype(str).isin(selected_state))
+            table_columns = ["seleccionar", "ip", "name", "type", "mac", "vendor", "criticidad", "inventory_id"]
+
+            edited_registered_assets = st.data_editor(
+                table_df[table_columns],
+                width="stretch",
+                hide_index=True,
+                disabled=[column for column in table_columns if column != "seleccionar"],
+                column_config={
+                    "seleccionar": st.column_config.CheckboxColumn("Seleccionar", default=False),
+                    "inventory_id": None,
+                },
+                key="registered_assets_selection_editor",
+                on_change=sync_registered_asset_selection_from_editor,
+            )
+
+            returned_selected_ids = set(
+                edited_registered_assets.loc[
+                    edited_registered_assets["seleccionar"], "inventory_id"
+                ].astype(str)
+            )
+            selected_state = set(st.session_state["selected_registered_asset_ids"])
+            selected_state.difference_update(visible_registered_id_set)
+            selected_state.update(returned_selected_ids)
+            st.session_state["selected_registered_asset_ids"] = selected_state
+            selected_registered_ids = sorted(selected_state)
+
+            if st.button(
+                "🗑️ Eliminar seleccionados",
+                disabled=not selected_registered_ids,
+                key="delete_selected_registered_assets",
+            ):
+                ok, msg = delete_registered_assets(selected_registered_ids)
+                if ok:
+                    st.session_state["selected_registered_asset_ids"] = set()
+                    st.session_state["_reset_registered_select_all"] = True
+                    st.session_state["registered_assets_notice"] = ("success", msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
 
 # Pestaña Raw
 with tab_raw:
