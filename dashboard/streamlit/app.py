@@ -621,6 +621,7 @@ else:
 # ==========================================
 tab_risk, tab_snort, tab_net, tab_ot, tab_assets, tab_vuln, tab_raw = st.tabs([
     "🚨 Fusión de Riesgos", "🛡️ IDS", "🌐 Red", "🏭 SCADA", "🧭 Equipos Descubiertos", "⚠️ Vulnerabilidades", "📝 Logs Raw"
+])
 tab_risk, tab_snort, tab_net, tab_ot, tab_assets, tab_vuln, tab_raw = st.tabs([
     "🚨 Fusión de Riesgos", "🛡️ IDS", "🌐 Red", "🏭 SCADA", "🧭 Equipos Descubiertos", "⚠️ Vulnerabilidades", "📝 Logs Raw"
 ])
