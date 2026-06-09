@@ -1,0 +1,2 @@
+alert udp any any -> any 53 (msg:"SIS DNS consulta extensa"; dsize:>220; sid:1100601; rev:1;)
+alert tcp any any -> any 53 (msg:"SIS DNS sobre TCP detectado"; flags:S; sid:1100602; rev:1;)

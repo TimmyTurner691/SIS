@@ -1,0 +1,2 @@
+alert tcp any any -> any 102 (msg:"SIS IEC-61850 MMS detectado"; flow:to_server,established; sid:1100201; rev:1;)
+alert tcp any any -> any 102 (msg:"SIS IEC-61850 TPKT detectado"; content:"|03 00|"; depth:2; sid:1100202; rev:1;)

@@ -1,0 +1,17 @@
+# Generado automáticamente por SIS. No editar manualmente.
+
+# Paquete: IEC-104
+alert tcp any any -> any 2404 (msg:"SIS IEC-104 APDU detectada"; content:"|68|"; depth:1; sid:1100001; rev:1;)
+alert tcp any any -> any 2404 (msg:"SIS IEC-104 activacion detectada"; content:"|06 00|"; offset:6; depth:2; sid:1100002; rev:1;)
+
+# Paquete: Modbus
+alert tcp any any -> any 502 (msg:"SIS Modbus escritura de bobina"; content:"|05|"; offset:7; depth:1; sid:1100101; rev:1;)
+alert tcp any any -> any 502 (msg:"SIS Modbus escritura de registros"; content:"|10|"; offset:7; depth:1; sid:1100102; rev:1;)
+
+# Paquete: IEC-61850
+alert tcp any any -> any 102 (msg:"SIS IEC-61850 MMS detectado"; flow:to_server,established; sid:1100201; rev:1;)
+alert tcp any any -> any 102 (msg:"SIS IEC-61850 TPKT detectado"; content:"|03 00|"; depth:2; sid:1100202; rev:1;)
+
+# Paquete: DNS
+alert udp any any -> any 53 (msg:"SIS DNS consulta extensa"; dsize:>220; sid:1100601; rev:1;)
+alert tcp any any -> any 53 (msg:"SIS DNS sobre TCP detectado"; flags:S; sid:1100602; rev:1;)

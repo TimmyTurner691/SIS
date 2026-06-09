@@ -28,10 +28,12 @@ services:
       SIS_CAPTURE_INTERFACE: ${SIS_CAPTURE_INTERFACE:-lo}
       SIS_SENSOR_MODE: ${SIS_SENSOR_MODE:-demo}
       SIS_SENSOR_PROMISCUOUS: ${SIS_SENSOR_PROMISCUOUS:-true}
+      SIS_SIGNATURES_DIR: /signatures
     volumes:
       - ${SIS_SNORT_LOGS_PATH:-./logs/logs_snort}:/var/log/snort
       - ${SIS_SNORT_CONF_PATH:-./configuracion/snort/snort.conf}:/etc/snort/snort.conf:ro
-      - ${SIS_SNORT_RULES_PATH:-./reglas_firmas/snort_rules}:/etc/snort/rules:ro
+      - ${SIS_SNORT_RULES_PATH:-./reglas_firmas/snort_rules}:/etc/snort/rules
+      - ./reglas_firmas:/signatures
       - ${SIS_SENSOR_HEALTH_PATH:-./logs/sensor_health}:/sensor-health
     restart: unless-stopped
     security_opt:
@@ -142,11 +144,13 @@ services:
       SIS_DASHBOARD_DISCOVERED_ASSETS_INDEX: ${SIS_DISCOVERED_ASSETS_INDEX:-sis-discovered-assets-v3}
       SIS_DASHBOARD_INVENTORY_PATH: ${SIS_DASHBOARD_INVENTORY_PATH:-/app/ot_inventory.json}
       SIS_SENSOR_HEALTH_DIR: /sensor-health
+      SIS_SIGNATURES_DIR: /signatures
     volumes:
       - ./dashboard/streamlit:/app
       - ${SIS_SNORT_LOGS_PATH:-./logs/logs_snort}:/var/log/snort:ro
       - ${SIS_ZEEK_LIVE_LOGS_PATH:-./logs/logs_zeek/logs/live}:/var/log/zeek:ro
       - ${SIS_SENSOR_HEALTH_PATH:-./logs/sensor_health}:/sensor-health:ro
+      - ./reglas_firmas:/signatures
       - ./ot_inventory.json:/app/ot_inventory.json
       - ./ot_inventory.json:/app/ot_inventory.json
     ports:

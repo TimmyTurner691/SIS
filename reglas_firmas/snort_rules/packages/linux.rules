@@ -1,0 +1,2 @@
+alert tcp any any -> any 22 (msg:"SIS Linux SSH detectado"; flags:S; sid:1100401; rev:1;)
+alert tcp any any -> any any (msg:"SIS posible descarga shell Linux"; content:"/bin/sh"; nocase; sid:1100402; rev:1;)

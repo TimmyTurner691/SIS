@@ -13,6 +13,8 @@ import time
 import redis  # <--- NUEVO: Necesario para enviar comandos
 from pathlib import Path
 
+from signature_manager import SignatureError, SignatureManager
+
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="SIS - SIEM Dashboard", page_icon="🛡️", layout="wide")
 
@@ -34,6 +36,7 @@ REDIS_PORT = int(os.getenv("SIS_DASHBOARD_REDIS_PORT", "6379"))
 INDEX_NAME = os.getenv("SIS_DASHBOARD_INDEX", "sis-logs-v1")
 DISCOVERED_ASSETS_INDEX = os.getenv("SIS_DASHBOARD_DISCOVERED_ASSETS_INDEX", "sis-discovered-assets-v3")
 SENSOR_HEALTH_DIR = os.getenv("SIS_SENSOR_HEALTH_DIR", "/sensor-health")
+SIGNATURES_DIR = os.getenv("SIS_SIGNATURES_DIR", "/signatures")
 RFC1918_NETWORKS = tuple(ipaddress.ip_network(cidr) for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 
 # --- CONEXIONES (ELASTIC Y REDIS) ---
@@ -719,8 +722,8 @@ else:
 # ==========================================
 # PESTAÑAS Y VISUALIZACIÓN (Sin cambios abajo)
 # ==========================================
-tab_risk, tab_snort, tab_net, tab_ot, tab_assets, tab_registered_assets, tab_raw = st.tabs([
-    "🚨 Fusión de Riesgos", "🛡️ IDS", "🌐 Red", "🏭 SCADA", "🧭 Equipos Descubiertos", "📋 Activos Registrados", "📝 Logs Raw"
+tab_risk, tab_snort, tab_net, tab_ot, tab_assets, tab_registered_assets, tab_signatures, tab_raw = st.tabs([
+    "🚨 Fusión de Riesgos", "🛡️ IDS", "🌐 Red", "🏭 SCADA", "🧭 Equipos Descubiertos", "📋 Activos Registrados", "✍️ Firmas / Reglas", "📝 Logs Raw"
 ])
 
 # ---------------- PESTAÑA 1: RIESGOS ----------------
@@ -1046,6 +1049,103 @@ with tab_registered_assets:
                     st.rerun()
                 else:
                     st.error(msg)
+
+# Pestaña Firmas / Reglas
+with tab_signatures:
+    st.header("✍️ Firmas / Reglas")
+    st.caption("Administre familias de detección y aplique cambios sin reiniciar el stack completo.")
+
+    try:
+        signature_manager = SignatureManager(SIGNATURES_DIR)
+        package_rows = signature_manager.package_rows()
+        signature_state = signature_manager.load_state()
+        profiles = signature_manager.profiles()
+
+        status_col, rules_col, profile_col = st.columns(3)
+        status_col.metric("Paquetes activos", sum(row["enabled"] for row in package_rows))
+        rules_col.metric("Reglas efectivas", signature_state.get("effective_rule_count", sum(row["rule_count"] for row in package_rows if row["enabled"])))
+        active_profile = signature_state.get("profile")
+        profile_names = {profile["id"]: profile["name"] for profile in profiles}
+        profile_col.metric("Perfil base", profile_names.get(active_profile, "Personalizado"))
+
+        sensor_reload = signature_manager.status()["sensor"]
+        if sensor_reload:
+            reload_state = sensor_reload.get("status", "desconocido")
+            reload_message = sensor_reload.get("message", "Sin detalle")
+            if reload_state == "applied":
+                st.success(f"Última recarga aplicada: {reload_message}")
+            elif reload_state == "rejected":
+                st.error(f"Última recarga rechazada; el sensor conserva las reglas anteriores: {reload_message}")
+            else:
+                st.info(f"Estado de recarga: {reload_state} — {reload_message}")
+        else:
+            st.info("El sensor todavía no informó el estado de una recarga.")
+
+        st.subheader("Perfiles de detección")
+        profile_labels = {profile["name"]: profile for profile in profiles}
+        profile_options = list(profile_labels)
+        current_profile_name = profile_names.get(active_profile)
+        selected_profile_name = st.selectbox(
+            "Partir desde un perfil prearmado",
+            profile_options,
+            index=profile_options.index(current_profile_name) if current_profile_name in profile_options else 0,
+            help="El perfil habilita una base que luego puede ajustar por paquete.",
+        )
+        selected_profile = profile_labels[selected_profile_name]
+        st.caption(selected_profile.get("description", ""))
+        if st.button("Aplicar perfil", type="primary", key="apply_signature_profile"):
+            signature_manager.apply_profile(selected_profile["id"])
+            for row in package_rows:
+                st.session_state.pop(f"signature_installed_{row['id']}", None)
+                st.session_state.pop(f"signature_enabled_{row['id']}", None)
+            st.session_state["signature_notice"] = f"Perfil {selected_profile_name} solicitado al sensor."
+            st.rerun()
+
+        notice = st.session_state.pop("signature_notice", None)
+        if notice:
+            st.success(notice)
+
+        st.divider()
+        st.subheader("Catálogo de paquetes")
+        with st.form("signature_packages_form"):
+            header = st.columns([2, 4, 1, 1, 1])
+            for column, label in zip(header, ["Paquete", "Cobertura", "Reglas", "Instalado", "Activo"]):
+                column.markdown(f"**{label}**")
+
+            installed_ids = []
+            enabled_ids = []
+            for row in package_rows:
+                columns = st.columns([2, 4, 1, 1, 1])
+                columns[0].write(row["name"])
+                columns[1].caption(row.get("description", ""))
+                columns[2].write(str(row["rule_count"]))
+                installed = columns[3].checkbox(
+                    f"Instalar {row['name']}",
+                    value=row["installed"],
+                    key=f"signature_installed_{row['id']}",
+                    label_visibility="collapsed",
+                )
+                enabled = columns[4].checkbox(
+                    f"Activar {row['name']}",
+                    value=row["enabled"],
+                    key=f"signature_enabled_{row['id']}",
+                    label_visibility="collapsed",
+                )
+                if installed:
+                    installed_ids.append(row["id"])
+                if installed and enabled:
+                    enabled_ids.append(row["id"])
+
+            apply_packages = st.form_submit_button("Validar y aplicar selección", type="primary")
+            if apply_packages:
+                signature_manager.set_packages(installed_ids, enabled_ids)
+                st.session_state["signature_notice"] = "Selección validada y recarga segura solicitada."
+                st.rerun()
+
+    except SignatureError as exc:
+        st.error(f"Configuración de firmas inválida: {exc}")
+    except OSError as exc:
+        st.error(f"No se pudo acceder al almacenamiento de firmas: {exc}")
 
 # Pestaña Raw
 with tab_raw:

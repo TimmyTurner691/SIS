@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "profiles": [
+    {"id": "ot-electrico", "name": "OT eléctrico", "description": "Protección para subestaciones y telecontrol eléctrico.", "enabled_packages": ["iec104", "modbus", "iec61850", "dns"]},
+    {"id": "ti-windows", "name": "TI Windows", "description": "Cobertura de estaciones y servidores Microsoft.", "enabled_packages": ["windows", "web", "dns", "smb", "otros"]},
+    {"id": "linux-web", "name": "Linux/Web", "description": "Servidores Linux, DNS y aplicaciones web.", "enabled_packages": ["linux", "web", "dns", "otros"]},
+    {"id": "mixto-liviano", "name": "Mixto liviano", "description": "Cobertura esencial OT/TI con menor carga.", "enabled_packages": ["iec104", "windows", "linux", "web", "dns"]}
+  ]
+}

@@ -36,3 +36,7 @@ Thumbs.db
 script_scapy_iec104.py
 atacante.py
 iec_104_simple.py
+
+# Estado de ejecución del gestor modular de firmas
+reglas_firmas/control/
+reglas_firmas/snort_rules/active.rules

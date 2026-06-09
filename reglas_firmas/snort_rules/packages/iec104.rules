@@ -1,0 +1,2 @@
+alert tcp any any -> any 2404 (msg:"SIS IEC-104 APDU detectada"; content:"|68|"; depth:1; sid:1100001; rev:1;)
+alert tcp any any -> any 2404 (msg:"SIS IEC-104 activacion detectada"; content:"|06 00|"; offset:6; depth:2; sid:1100002; rev:1;)
