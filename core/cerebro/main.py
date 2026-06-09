@@ -13,6 +13,7 @@ from elasticsearch import Elasticsearch, helpers
 import warnings
 from elasticsearch import ElasticsearchWarning
 from discovered_assets import DiscoveredAssetStore
+from discovered_assets import DiscoveredAssetStore
 
 warnings.filterwarnings("ignore", category=ElasticsearchWarning)
 
@@ -404,6 +405,7 @@ def main():
     r, es = conectar_servicios()
     engine = RiskFusionEngine()
     discovered_assets = DiscoveredAssetStore(es, DISCOVERED_ASSETS_INDEX)
+    discovered_assets = DiscoveredAssetStore(es, DISCOVERED_ASSETS_INDEX)
 
     state = reset_brain_state()
     model = state["model"]
@@ -554,6 +556,7 @@ def main():
                 if not doc: continue
                 
                 final_doc = engine.evaluar_riesgo(doc, ai_score, IS_FLOOD)
+                discovered_assets.process_event(raw_json, final_doc)
                 discovered_assets.process_event(raw_json, final_doc)
                 
                 if final_doc.get('risk_label') == 'CRÍTICO' and not IS_FLOOD:

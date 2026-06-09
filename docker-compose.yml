@@ -151,6 +151,7 @@ services:
       - ./core/cerebro:/python_core:ro
       - ${SIS_SENSOR_HEALTH_PATH:-./logs/sensor_health}:/sensor-health:ro
       - ./ot_inventory.json:/app/ot_inventory.json
+      - ./ot_inventory.json:/app/ot_inventory.json
       - ./cve_report.csv:/app/cve_report.csv:ro
     ports:
       - "${SIS_MANAGEMENT_BIND_IP:-0.0.0.0}:${SIS_DASHBOARD_PORT:-8501}:${SIS_DASHBOARD_INTERNAL_PORT:-8501}"
