@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 
-from signature_manager import SignatureManager
+from signature_manager import SignatureManager, validate_rules
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -24,6 +24,39 @@ class SignatureCatalogTests(unittest.TestCase):
         self.assertEqual(len(rows), len(enabled_names))
         self.assertEqual(len(sids), len(set(sids)))
         self.assertTrue(all(row["rule_count"] > 0 for row in rows))
+
+    def test_dns_package_uses_its_reserved_sid_block(self):
+        dns_path = REPOSITORY_ROOT / "reglas_firmas/snort_rules/packages/dns.rules"
+        dns_text = dns_path.read_text(encoding="utf-8")
+        sids = validate_rules(dns_text)
+
+        self.assertEqual(55, len(sids))
+        self.assertEqual(list(range(1100601, 1100656)), sids)
+        self.assertNotIn("sid:1206", dns_text)
+        self.assertIn('msg:"SIS DNS possible repeated hex label tunnel"', dns_text)
+        self.assertIn('msg:"SIS DNS HTTPS/SVCB query observed"', dns_text)
+
+    def test_each_package_stays_inside_its_reserved_sid_block(self):
+        expected_blocks = {
+            "iec104": 1100000,
+            "modbus": 1100100,
+            "iec61850": 1100200,
+            "windows": 1100300,
+            "linux": 1100400,
+            "web": 1100500,
+            "dns": 1100600,
+            "smb": 1100700,
+            "otros": 1100800,
+        }
+        for package in self.manager.catalog():
+            rule_path = self.manager.packages_dir / package["rule_file"]
+            sids = validate_rules(rule_path.read_text(encoding="utf-8"))
+            lower = expected_blocks[package["id"]] + 1
+            upper = expected_blocks[package["id"]] + 99
+            self.assertTrue(
+                all(lower <= sid <= upper for sid in sids),
+                f"{package['id']} contiene un SID fuera de {lower}-{upper}",
+            )
 
     def test_profiles_only_reference_catalog_packages(self):
         package_ids = {package["id"] for package in self.manager.catalog()}
