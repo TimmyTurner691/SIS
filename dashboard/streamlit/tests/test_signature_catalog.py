@@ -36,26 +36,38 @@ class SignatureCatalogTests(unittest.TestCase):
         self.assertIn('msg:"SIS DNS possible repeated hex label tunnel"', dns_text)
         self.assertIn('msg:"SIS DNS HTTPS/SVCB query observed"', dns_text)
 
-    def test_each_package_stays_inside_its_reserved_sid_block(self):
-        expected_blocks = {
-            "iec104": 1100000,
-            "modbus": 1100100,
-            "iec61850": 1100200,
-            "windows": 1100300,
-            "linux": 1100400,
-            "web": 1100500,
-            "dns": 1100600,
-            "smb": 1100700,
-            "otros": 1100800,
+    def test_iec104_package_uses_reserved_starter_and_expansion_blocks(self):
+        iec_path = REPOSITORY_ROOT / "reglas_firmas/snort_rules/packages/iec104.rules"
+        iec_text = iec_path.read_text(encoding="utf-8")
+        sids = validate_rules(iec_text)
+
+        self.assertEqual(108, len(sids))
+        self.assertEqual([1100001, 1100002], sids[:2])
+        self.assertEqual(list(range(1110001, 1110107)), sids[2:])
+        self.assertNotIn("sid:1200", iec_text)
+        self.assertIn('msg:"SIS IEC104 U-frame STARTDT activation"', iec_text)
+        self.assertIn('msg:"SIS IEC104 typeid 105 C_RP_NA_1 reset process command"', iec_text)
+        self.assertIn('msg:"SIS IEC104 reserved or unusual typeid 80"', iec_text)
+
+    def test_each_package_stays_inside_its_reserved_sid_ranges(self):
+        expected_ranges = {
+            "iec104": [(1100001, 1100099), (1110001, 1110199)],
+            "modbus": [(1100101, 1100199)],
+            "iec61850": [(1100201, 1100299)],
+            "windows": [(1100301, 1100399)],
+            "linux": [(1100401, 1100499)],
+            "web": [(1100501, 1100599)],
+            "dns": [(1100601, 1100699)],
+            "smb": [(1100701, 1100799)],
+            "otros": [(1100801, 1100899)],
         }
         for package in self.manager.catalog():
             rule_path = self.manager.packages_dir / package["rule_file"]
             sids = validate_rules(rule_path.read_text(encoding="utf-8"))
-            lower = expected_blocks[package["id"]] + 1
-            upper = expected_blocks[package["id"]] + 99
+            ranges = expected_ranges[package["id"]]
             self.assertTrue(
-                all(lower <= sid <= upper for sid in sids),
-                f"{package['id']} contiene un SID fuera de {lower}-{upper}",
+                all(any(lower <= sid <= upper for lower, upper in ranges) for sid in sids),
+                f"{package['id']} contiene un SID fuera de sus rangos reservados {ranges}",
             )
 
     def test_profiles_only_reference_catalog_packages(self):

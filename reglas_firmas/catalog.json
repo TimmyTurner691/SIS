@@ -1,7 +1,7 @@
 {
   "version": 1,
   "packages": [
-    {"id": "iec104", "name": "IEC-104", "description": "Tráfico y comandos IEC 60870-5-104.", "rule_file": "iec104.rules", "default_installed": true},
+    {"id": "iec104", "name": "IEC-104", "description": "APCI/U-frames, ASDUs, comandos, COT, tipos reservados y patrones de inundación IEC 60870-5-104.", "rule_file": "iec104.rules", "default_installed": true},
     {"id": "modbus", "name": "Modbus", "description": "Operaciones Modbus/TCP y escrituras sensibles.", "rule_file": "modbus.rules", "default_installed": true},
     {"id": "iec61850", "name": "IEC-61850", "description": "MMS/GOOSE usados en automatización eléctrica.", "rule_file": "iec61850.rules", "default_installed": true},
     {"id": "windows", "name": "Windows", "description": "Servicios y patrones de amenaza Windows.", "rule_file": "windows.rules", "default_installed": true},
