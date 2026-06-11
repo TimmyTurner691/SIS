@@ -5,7 +5,7 @@ from pathlib import Path
 STREAMLIT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(STREAMLIT_DIR))
 
-from event_visibility import contains_ipv6, is_legacy_test_alert, is_visible_event
+from event_visibility import contains_ipv6, is_legacy_test_alert, is_unspecified_traffic, is_visible_event
 
 
 class EventVisibilityTests(unittest.TestCase):
@@ -25,6 +25,20 @@ class EventVisibilityTests(unittest.TestCase):
             "dst_ip": "192.168.6.243",
         }
         self.assertFalse(is_legacy_test_alert(event))
+        self.assertTrue(is_visible_event(event))
+
+    def test_unspecified_endpoint_pair_is_hidden_everywhere(self):
+        event = {
+            "raw_log": '{"peer":"zeek","metric_type":"counter"}',
+            "src_ip": "0.0.0.0",
+            "dst_ip": "0.0.0.0",
+        }
+        self.assertTrue(is_unspecified_traffic(event))
+        self.assertFalse(is_visible_event(event))
+
+    def test_real_ipv4_flow_remains_visible(self):
+        event = {"src_ip": "192.168.6.192", "dst_ip": "192.168.6.243"}
+        self.assertFalse(is_unspecified_traffic(event))
         self.assertTrue(is_visible_event(event))
 
     def test_ipv6_history_is_hidden(self):

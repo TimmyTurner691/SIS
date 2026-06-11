@@ -43,6 +43,21 @@ class EventNormalizationTests(unittest.TestCase):
         self.assertIsNotNone(normalized)
         self.assertIn("SIS ICMP detectado", normalized["message"])
 
+    def test_zeek_metric_without_endpoints_is_discarded(self):
+        event = {
+            "log": {"file": {"path": "/logs/zeek/metrics.log"}},
+            "message": json.dumps({"peer": "zeek", "metric_type": "counter", "name": "zeek_dns"}),
+        }
+        self.assertIsNone(normalizar_evento(json.dumps(event)))
+
+    def test_explicit_unspecified_flow_is_discarded(self):
+        event = {
+            "log": {"file": {"path": "/logs/snort/alert"}},
+            "fields": {"source_type": "snort"},
+            "message": "[**] malformed event [**] 0.0.0.0 -> 0.0.0.0",
+        }
+        self.assertIsNone(normalizar_evento(json.dumps(event)))
+
     def test_ipv4_event_is_preserved(self):
         event = {
             "log": {"file": {"path": "/logs/snort/alert"}},

@@ -6,7 +6,7 @@ from pathlib import Path
 CEREBRO_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CEREBRO_DIR))
 
-from event_filter import contains_ipv6, is_ipv6_address, is_legacy_test_alert
+from event_filter import contains_ipv6, is_ipv6_address, is_legacy_test_alert, is_unspecified_traffic
 
 
 class EventFilterTests(unittest.TestCase):
@@ -29,6 +29,16 @@ class LegacyAlertFilterTests(unittest.TestCase):
         self.assertTrue(is_legacy_test_alert('[**] [1:1000005:1] cualquier texto [**]'))
         self.assertTrue(is_legacy_test_alert('[TEST] Ping Detectado en WiFi'))
         self.assertFalse(is_legacy_test_alert('[**] [1:1100802:1] SIS ICMP detectado [**]'))
+
+
+class UnspecifiedTrafficFilterTests(unittest.TestCase):
+    def test_pair_of_unspecified_endpoints_is_trash(self):
+        self.assertTrue(is_unspecified_traffic({"src_ip": "0.0.0.0", "dst_ip": "0.0.0.0"}))
+        self.assertTrue(is_unspecified_traffic("0.0.0.0 -> 0.0.0.0"))
+
+    def test_single_unspecified_endpoint_is_not_discarded(self):
+        self.assertFalse(is_unspecified_traffic({"src_ip": "0.0.0.0", "dst_ip": "192.168.1.10"}))
+        self.assertFalse(is_unspecified_traffic({"src_ip": "192.168.1.10", "dst_ip": "0.0.0.0"}))
 
 
 if __name__ == "__main__":

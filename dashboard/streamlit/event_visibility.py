@@ -8,6 +8,8 @@ from collections.abc import Mapping
 
 LEGACY_TEST_SID = "1000005"
 LEGACY_TEST_MESSAGE = "[TEST] Ping Detectado en WiFi"
+UNSPECIFIED_IPV4 = "0.0.0.0"
+UNSPECIFIED_FLOW_RE = re.compile(r"\b0\.0\.0\.0(?::\d+)?\s*(?:-|=)>\s*0\.0\.0\.0(?::\d+)?\b")
 _IP_TOKEN_RE = re.compile(r"[0-9A-Fa-f:]+")
 
 
@@ -49,5 +51,19 @@ def is_legacy_test_alert(value) -> bool:
     return False
 
 
+def is_unspecified_traffic(value) -> bool:
+    """Detecta tráfico basura con ambos extremos en 0.0.0.0."""
+    if isinstance(value, Mapping):
+        src_ip = value.get("src_ip")
+        dst_ip = value.get("dst_ip")
+        if str(src_ip).strip() == UNSPECIFIED_IPV4 and str(dst_ip).strip() == UNSPECIFIED_IPV4:
+            return True
+    return any(UNSPECIFIED_FLOW_RE.search(text) for text in _walk_values(value))
+
+
 def is_visible_event(value) -> bool:
-    return not contains_ipv6(value) and not is_legacy_test_alert(value)
+    return (
+        not contains_ipv6(value)
+        and not is_legacy_test_alert(value)
+        and not is_unspecified_traffic(value)
+    )

@@ -13,7 +13,7 @@ from elasticsearch import Elasticsearch, helpers
 import warnings
 from elasticsearch import ElasticsearchWarning
 from discovered_assets import DiscoveredAssetStore
-from event_filter import contains_ipv6, is_legacy_test_alert
+from event_filter import contains_ipv6, is_legacy_test_alert, is_unspecified_traffic
 
 warnings.filterwarnings("ignore", category=ElasticsearchWarning)
 
@@ -204,8 +204,8 @@ def conectar_servicios():
             time.sleep(5)
     return r, es
 
-def purge_legacy_test_alerts(es):
-    """Elimina de Elasticsearch únicamente la alerta ICMP heredada SID 1000005."""
+def purge_trash_events(es):
+    """Elimina históricos TEST y eventos sin extremos 0.0.0.0 → 0.0.0.0."""
     query = {
         "query": {
             "bool": {
@@ -213,6 +213,36 @@ def purge_legacy_test_alerts(es):
                     {"match_phrase": {"raw_log": "Ping Detectado en WiFi"}},
                     {"match_phrase": {"message": "Ping Detectado en WiFi"}},
                     {"query_string": {"query": "1000005", "fields": ["raw_log", "message"]}},
+                    {
+                        "bool": {
+                            "filter": [
+                                {
+                                    "bool": {
+                                        "should": [
+                                            {"term": {"src_ip": "0.0.0.0"}},
+                                            {"term": {"src_ip.keyword": "0.0.0.0"}},
+                                        ],
+                                        "minimum_should_match": 1,
+                                    }
+                                },
+                                {
+                                    "bool": {
+                                        "should": [
+                                            {"term": {"dst_ip": "0.0.0.0"}},
+                                            {"term": {"dst_ip.keyword": "0.0.0.0"}},
+                                        ],
+                                        "minimum_should_match": 1,
+                                    }
+                                },
+                            ]
+                        }
+                    },
+                    {
+                        "query_string": {
+                            "query": '"0.0.0.0 -> 0.0.0.0"',
+                            "fields": ["raw_log", "message"],
+                        }
+                    },
                 ],
                 "minimum_should_match": 1,
             }
@@ -227,10 +257,10 @@ def purge_legacy_test_alerts(es):
         )
         deleted = result.get("deleted", 0)
         if deleted:
-            print(f"🧹 Eliminadas {deleted} alertas ICMP TEST heredadas de Elasticsearch", flush=True)
+            print(f"🧹 Eliminados {deleted} eventos basura históricos de Elasticsearch", flush=True)
         return deleted
     except Exception as exc:
-        print(f"⚠️ No se pudieron purgar alertas TEST históricas: {exc}", flush=True)
+        print(f"⚠️ No se pudieron purgar eventos basura históricos: {exc}", flush=True)
         return 0
 
 
@@ -278,6 +308,9 @@ def normalizar_evento(raw_json):
                 doc['protocol'] = 'iec104'; doc['sub_source'] = os.path.basename(file_path)
                 doc['comando_humano'] = traducir_iec104(doc['sub_source'], str(message_raw))
             elif "conn.log" in file_path: doc['protocol'] = zeek_data.get('proto', 'tcp')
+
+        if is_unspecified_traffic(doc) or is_unspecified_traffic(message_raw):
+            return None
         return doc
     except: return None
 
@@ -439,7 +472,7 @@ def full_reset_demo(es, r, engine):
 def main():
     print(f"🚀 SIS Core v7.2: MONITOR DE CONSOLA ACTIVO", flush=True)
     r, es = conectar_servicios()
-    purge_legacy_test_alerts(es)
+    purge_trash_events(es)
     engine = RiskFusionEngine()
     discovered_assets = DiscoveredAssetStore(es, DISCOVERED_ASSETS_INDEX)
     discovered_assets = DiscoveredAssetStore(es, DISCOVERED_ASSETS_INDEX)

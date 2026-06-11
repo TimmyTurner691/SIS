@@ -9,6 +9,8 @@ from collections.abc import Mapping
 _IP_TOKEN_RE = re.compile(r"[0-9A-Fa-f:]+")
 LEGACY_TEST_SID = "1000005"
 LEGACY_TEST_MESSAGE = "[TEST] Ping Detectado en WiFi"
+UNSPECIFIED_IPV4 = "0.0.0.0"
+UNSPECIFIED_FLOW_RE = re.compile(r"\b0\.0\.0\.0(?::\d+)?\s*(?:-|=)>\s*0\.0\.0\.0(?::\d+)?\b")
 
 
 def is_ipv6_address(value) -> bool:
@@ -48,3 +50,16 @@ def is_legacy_test_alert(value) -> bool:
     if re.search(rf"\[\s*\d+\s*:\s*{LEGACY_TEST_SID}\s*:\s*\d+\s*\]", text):
         return True
     return bool(re.search(rf"\bsid\s*:\s*{LEGACY_TEST_SID}\s*;", text, re.IGNORECASE))
+
+
+def is_unspecified_traffic(value) -> bool:
+    """Detecta eventos sin extremos: 0.0.0.0 como origen y destino."""
+    if isinstance(value, Mapping):
+        src_ip = value.get("src_ip")
+        dst_ip = value.get("dst_ip")
+        if str(src_ip).strip() == UNSPECIFIED_IPV4 and str(dst_ip).strip() == UNSPECIFIED_IPV4:
+            return True
+        return any(is_unspecified_traffic(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(is_unspecified_traffic(item) for item in value)
+    return bool(UNSPECIFIED_FLOW_RE.search(str(value)))

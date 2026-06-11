@@ -132,6 +132,32 @@ def get_data(minutes=60, start=None, end=None, limit=5000):
                     {"wildcard": {"raw_log.keyword": "*Ping Detectado en WiFi*"}},
                     {"wildcard": {"message.keyword": "*1000005*"}},
                     {"wildcard": {"message.keyword": "*Ping Detectado en WiFi*"}},
+                    {
+                        "bool": {
+                            "filter": [
+                                {
+                                    "bool": {
+                                        "should": [
+                                            {"term": {"src_ip": "0.0.0.0"}},
+                                            {"term": {"src_ip.keyword": "0.0.0.0"}},
+                                        ],
+                                        "minimum_should_match": 1,
+                                    }
+                                },
+                                {
+                                    "bool": {
+                                        "should": [
+                                            {"term": {"dst_ip": "0.0.0.0"}},
+                                            {"term": {"dst_ip.keyword": "0.0.0.0"}},
+                                        ],
+                                        "minimum_should_match": 1,
+                                    }
+                                },
+                            ]
+                        }
+                    },
+                    {"wildcard": {"raw_log.keyword": "*0.0.0.0 -> 0.0.0.0*"}},
+                    {"wildcard": {"message.keyword": "*0.0.0.0 -> 0.0.0.0*"}},
                 ],
             }
         },
