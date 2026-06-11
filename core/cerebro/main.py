@@ -35,7 +35,6 @@ BATCH_SIZE = 5000
 DIRECT_LOG_POLL_ENABLED = os.getenv("SIS_DIRECT_LOG_POLL_ENABLED", "false").lower() == "true"
 DIRECT_LOG_POLL_INTERVAL = float(os.getenv("SIS_DIRECT_LOG_POLL_INTERVAL", "1.0"))
 DIRECT_LOG_MAX_LINES = int(os.getenv("SIS_DIRECT_LOG_MAX_LINES", "1000"))
-EVENT_MAX_INGEST_AGE_SECONDS = float(os.getenv("SIS_EVENT_MAX_INGEST_AGE_SECONDS", "120"))
 
 # ================= LÓGICA DE TRADUCCIÓN =================
 # ... (Sin cambios en traducir_iec104) ...
@@ -339,6 +338,18 @@ def _event_epoch(event, message_raw, now=None):
     return now
 
 
+def _index_epoch(event, now=None):
+    """Uses Filebeat ingestion time for dashboard visibility, falling back to current time."""
+    now = time.time() if now is None else now
+    timestamp = event.get("@timestamp")
+    if timestamp:
+        try:
+            return datetime.fromisoformat(str(timestamp).replace("Z", "+00:00")).timestamp()
+        except (TypeError, ValueError):
+            pass
+    return now
+
+
 def normalizar_evento(raw_json):
     try:
         event = json.loads(raw_json)
@@ -358,17 +369,16 @@ def normalizar_evento(raw_json):
 
         now_epoch = time.time()
         event_epoch = _event_epoch(event, message_raw, now=now_epoch)
-        if event_epoch < now_epoch - EVENT_MAX_INGEST_AGE_SECONDS or event_epoch > now_epoch + 5:
-            return None
+        index_epoch = _index_epoch(event, now=now_epoch)
         doc = {
-            "@timestamp": datetime.fromtimestamp(event_epoch, timezone.utc).isoformat(),
+            "@timestamp": datetime.fromtimestamp(index_epoch, timezone.utc).isoformat(),
             "_event_epoch": event_epoch,
             "raw_log": str(message_raw)[:500],
             "src_ip": "0.0.0.0", "dst_ip": "0.0.0.0", "dst_port": 0,
             "protocol": "unknown", "source": "unknown", "comando_humano": "N/A"
         }
 
-        if "snort" in file_path or event.get('fields', {}).get('source_type') == 'snort':
+        if "snort" in file_path or event.get('source_type') == 'snort' or event.get('fields', {}).get('source_type') == 'snort':
             doc['source'] = 'snort'
             protocol_match = re.search(r'\{([A-Za-z0-9_-]+)\}', str(message_raw))
             doc['protocol'] = protocol_match.group(1).lower() if protocol_match else 'ids_alert'

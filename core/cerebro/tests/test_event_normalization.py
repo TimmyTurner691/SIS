@@ -8,7 +8,7 @@ from pathlib import Path
 CEREBRO_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CEREBRO_DIR))
 
-from main import _event_epoch, normalizar_evento
+from main import _event_epoch, _index_epoch, normalizar_evento
 
 
 class EventNormalizationTests(unittest.TestCase):
@@ -71,14 +71,50 @@ class EventNormalizationTests(unittest.TestCase):
         parsed = _event_epoch({}, f"{stamp} [**] SIS ICMP detectado", now=now)
         self.assertAlmostEqual(now - 2, parsed, delta=1)
 
-    def test_stale_snort_replay_is_discarded(self):
-        stale = datetime.fromtimestamp(time.time() - 600, timezone.utc).strftime("%m/%d-%H:%M:%S.%f")
+    def test_stale_snort_replay_remains_visible_but_keeps_sensor_time(self):
+        now = time.time()
+        stale_epoch = now - 600
+        stale = datetime.fromtimestamp(stale_epoch, timezone.utc).strftime("%m/%d-%H:%M:%S.%f")
+        ingested = datetime.fromtimestamp(now, timezone.utc).isoformat().replace("+00:00", "Z")
         event = {
+            "@timestamp": ingested,
             "log": {"file": {"path": "/logs/snort/alert"}},
-            "fields": {"source_type": "snort"},
+            "source_type": "snort",
             "message": f"{stale} [**] [1:1100802:1] SIS ICMP detectado [**] {{ICMP}} 192.168.1.88 -> 192.168.1.83",
         }
-        self.assertIsNone(normalizar_evento(json.dumps(event)))
+        normalized = normalizar_evento(json.dumps(event))
+        self.assertIsNotNone(normalized)
+        self.assertAlmostEqual(stale_epoch, normalized["_event_epoch"], delta=1)
+        self.assertAlmostEqual(now, datetime.fromisoformat(normalized["@timestamp"]).timestamp(), delta=1)
+        self.assertEqual("snort", normalized["source"])
+
+    def test_filebeat_timestamp_controls_dashboard_visibility(self):
+        now = time.time()
+        event = {"@timestamp": datetime.fromtimestamp(now, timezone.utc).isoformat()}
+        self.assertAlmostEqual(now, _index_epoch(event, now=now + 500), delta=1)
+
+    def test_missing_filebeat_timestamp_falls_back_to_ingestion_time(self):
+        self.assertEqual(1234, _index_epoch({}, now=1234))
+
+    def test_stale_zeek_sensor_time_is_still_indexed_at_filebeat_time(self):
+        now = time.time()
+        ingested = datetime.fromtimestamp(now, timezone.utc).isoformat().replace("+00:00", "Z")
+        event = {
+            "@timestamp": ingested,
+            "source_type": "zeek",
+            "log": {"file": {"path": "/logs/zeek/conn.log"}},
+            "message": json.dumps({
+                "ts": now - 3600,
+                "id.orig_h": "192.168.1.10",
+                "id.resp_h": "192.168.1.20",
+                "proto": "tcp",
+            }),
+        }
+        normalized = normalizar_evento(json.dumps(event))
+        self.assertIsNotNone(normalized)
+        self.assertAlmostEqual(now - 3600, normalized["_event_epoch"], delta=1)
+        self.assertAlmostEqual(now, datetime.fromisoformat(normalized["@timestamp"]).timestamp(), delta=1)
+        self.assertEqual("tcp", normalized["protocol"])
 
     def test_ipv4_event_is_preserved(self):
         event = {
