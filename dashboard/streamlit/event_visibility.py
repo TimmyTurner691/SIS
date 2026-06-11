@@ -9,6 +9,7 @@ from collections.abc import Mapping
 LEGACY_TEST_SID = "1000005"
 LEGACY_TEST_MESSAGE = "[TEST] Ping Detectado en WiFi"
 UNSPECIFIED_IPV4 = "0.0.0.0"
+LEGACY_GLOBAL_FLOOD_MESSAGE = "CRÍTICO: Inundación de Red (DoS)"
 UNSPECIFIED_FLOW_RE = re.compile(r"\b0\.0\.0\.0(?::\d+)?\s*(?:-|=)>\s*0\.0\.0\.0(?::\d+)?\b")
 _IP_TOKEN_RE = re.compile(r"[0-9A-Fa-f:]+")
 
@@ -61,9 +62,17 @@ def is_unspecified_traffic(value) -> bool:
     return any(UNSPECIFIED_FLOW_RE.search(text) for text in _walk_values(value))
 
 
+def is_legacy_unconfirmed_flood(value) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    message = str(value.get("mitre_msg", ""))
+    return message == LEGACY_GLOBAL_FLOOD_MESSAGE and "dos_confirmed" not in value
+
+
 def is_visible_event(value) -> bool:
     return (
         not contains_ipv6(value)
         and not is_legacy_test_alert(value)
         and not is_unspecified_traffic(value)
+        and not is_legacy_unconfirmed_flood(value)
     )

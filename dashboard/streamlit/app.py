@@ -158,6 +158,14 @@ def get_data(minutes=60, start=None, end=None, limit=5000):
                     },
                     {"wildcard": {"raw_log.keyword": "*0.0.0.0 -> 0.0.0.0*"}},
                     {"wildcard": {"message.keyword": "*0.0.0.0 -> 0.0.0.0*"}},
+                    {
+                        "bool": {
+                            "filter": [
+                                {"match_phrase": {"mitre_msg": "CRÍTICO: Inundación de Red (DoS)"}},
+                            ],
+                            "must_not": [{"exists": {"field": "dos_confirmed"}}],
+                        }
+                    },
                 ],
             }
         },
@@ -487,7 +495,7 @@ def lógica_interpretar_scada_fallback(row):
 def lógica_calcular_anomalia_pct(valor):
     try:
         val = float(valor)
-        return int(abs(val) * 100) if val < 0 else 0
+        return min(int(abs(val) * 200), 100) if val < 0 else 0
     except: return 0
 
 def lógica_limpiar_snort_msg(row):
@@ -779,7 +787,9 @@ with tab_risk:
         k1, k2, k3, k4 = st.columns(4)
         
         max_score = df['risk_total_score'].max()
-        criticos = len(df[df['risk_total_score'] >= 17])
+        critical_events = df[df['risk_total_score'] >= 17]
+        incident_columns = ['src_ip', 'dst_ip', 'mitre_msg']
+        criticos = len(critical_events.drop_duplicates(subset=incident_columns))
         
         peor_score_ia = df['ai_score'].min() if 'ai_score' in df.columns else 0
         nivel_anomalia_kpi = lógica_calcular_anomalia_pct(peor_score_ia)
@@ -798,7 +808,7 @@ with tab_risk:
         col_incidents = st.columns(1)[0]
         with col_incidents:
             st.subheader("Últimos Incidentes Detectados")
-            df_risk = df[df['risk_total_score'] >= 8].drop_duplicates(subset=['src_ip', 'mitre_msg']).head(5)
+            df_risk = df[df['risk_total_score'] >= 8].drop_duplicates(subset=['src_ip', 'dst_ip', 'mitre_msg']).head(5)
             
             if df_risk.empty:
                 st.success("✅ Sistema estable. No hay incidentes de riesgo Medio/Alto.")

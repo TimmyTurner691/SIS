@@ -5,7 +5,7 @@ from pathlib import Path
 STREAMLIT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(STREAMLIT_DIR))
 
-from event_visibility import contains_ipv6, is_legacy_test_alert, is_unspecified_traffic, is_visible_event
+from event_visibility import contains_ipv6, is_legacy_test_alert, is_legacy_unconfirmed_flood, is_unspecified_traffic, is_visible_event
 
 
 class EventVisibilityTests(unittest.TestCase):
@@ -39,6 +39,16 @@ class EventVisibilityTests(unittest.TestCase):
     def test_real_ipv4_flow_remains_visible(self):
         event = {"src_ip": "192.168.6.192", "dst_ip": "192.168.6.243"}
         self.assertFalse(is_unspecified_traffic(event))
+        self.assertTrue(is_visible_event(event))
+
+    def test_legacy_global_flood_false_positive_is_hidden(self):
+        event = {"mitre_msg": "CRÍTICO: Inundación de Red (DoS)", "src_ip": "192.168.1.1", "dst_ip": "192.168.1.2"}
+        self.assertTrue(is_legacy_unconfirmed_flood(event))
+        self.assertFalse(is_visible_event(event))
+
+    def test_new_confirmed_flood_remains_visible(self):
+        event = {"mitre_msg": "CRÍTICO: Inundación de Red (DoS) confirmada", "dos_confirmed": True}
+        self.assertFalse(is_legacy_unconfirmed_flood(event))
         self.assertTrue(is_visible_event(event))
 
     def test_ipv6_history_is_hidden(self):

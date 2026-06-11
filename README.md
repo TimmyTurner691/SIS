@@ -535,3 +535,7 @@ SIS descarta eventos IPv6 durante la normalización central, antes de enriquecer
 Al conectar con Elasticsearch, Cerebro elimina selectivamente los documentos históricos que contengan el SID `1000005` o el mensaje `Ping Detectado en WiFi`. La limpieza no afecta a la firma vigente `SIS ICMP detectado` (SID `1100802`).
 
 Los eventos cuyo origen y destino sean simultáneamente `0.0.0.0` se consideran tráfico basura. Cerebro los descarta antes de indexarlos, elimina los históricos existentes al iniciar y el dashboard los excluye de todas las vistas, incluida **Logs Raw**. Un único extremo `0.0.0.0` no activa este filtro.
+
+### Afinación de IA y detección DoS
+
+La detección DoS ya no utiliza el volumen global del sistema para clasificar cada evento. Cerebro calcula tasas sobre una ventana móvil de cinco segundos y exige concentración por flujo o destino, o una firma DoS explícita. El modelo IsolationForest usa tasas logarítmicas estables (EPS aceptados, EPS del flujo dominante, pares únicos y proporción IDS), no aprende ventanas de ataque como tráfico normal y solo aporta evidencia secundaria al riesgo. Una desviación de IA por sí sola no puede convertir ICMP normal en DoS crítico. El fallback directo de logs queda deshabilitado por defecto para evitar duplicar eventos que ya entrega Filebeat.

@@ -67,6 +67,7 @@ class EventNormalizationTests(unittest.TestCase):
         normalized = normalizar_evento(json.dumps(event))
         self.assertEqual("192.168.6.243", normalized["src_ip"])
         self.assertEqual("192.168.6.192", normalized["dst_ip"])
+        self.assertEqual("icmp", normalized["protocol"])
 
 
 if __name__ == "__main__":

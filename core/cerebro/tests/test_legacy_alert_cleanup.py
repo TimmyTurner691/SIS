@@ -25,6 +25,8 @@ class TrashEventCleanupTests(unittest.TestCase):
         self.assertIn("src_ip", serialized_query)
         self.assertIn("dst_ip", serialized_query)
         self.assertIn("0.0.0.0", serialized_query)
+        self.assertIn("CRÍTICO: Inundación de Red (DoS)", serialized_query)
+        self.assertIn("dos_confirmed", serialized_query)
         self.assertNotIn("1100802", serialized_query)
         self.assertNotIn("SIS ICMP detectado", serialized_query)
 
