@@ -27,6 +27,7 @@ class RiskFusionTests(unittest.TestCase):
         self.assertEqual("BAJO", result["risk_label"])
         self.assertEqual(5, result["risk_total_score"])
         self.assertFalse(result["dos_confirmed"])
+        self.assertEqual(2, result["detection_model_version"])
         self.assertEqual("Monitorización normal", result["mitre_msg"])
 
     def test_ml_anomaly_alone_cannot_make_normal_icmp_critical(self):

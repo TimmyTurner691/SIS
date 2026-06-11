@@ -4,13 +4,13 @@ import redis
 import os
 import re
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from elasticsearch import Elasticsearch, helpers
 import warnings
 from elasticsearch import ElasticsearchWarning
 from discovered_assets import DiscoveredAssetStore
 from event_filter import contains_ipv6, is_legacy_test_alert, is_unspecified_traffic
-from traffic_analysis import TrafficBaselineModel, TrafficRateMonitor
+from traffic_analysis import EventReplayGuard, TrafficBaselineModel, TrafficRateMonitor
 
 warnings.filterwarnings("ignore", category=ElasticsearchWarning)
 
@@ -35,6 +35,7 @@ BATCH_SIZE = 5000
 DIRECT_LOG_POLL_ENABLED = os.getenv("SIS_DIRECT_LOG_POLL_ENABLED", "false").lower() == "true"
 DIRECT_LOG_POLL_INTERVAL = float(os.getenv("SIS_DIRECT_LOG_POLL_INTERVAL", "1.0"))
 DIRECT_LOG_MAX_LINES = int(os.getenv("SIS_DIRECT_LOG_MAX_LINES", "1000"))
+EVENT_MAX_INGEST_AGE_SECONDS = float(os.getenv("SIS_EVENT_MAX_INGEST_AGE_SECONDS", "120"))
 
 # ================= LÓGICA DE TRADUCCIÓN =================
 # ... (Sin cambios en traducir_iec104) ...
@@ -155,6 +156,7 @@ class RiskFusionEngine:
             "risk_probability": probability,
             "ai_score": anomaly_score,
             "dos_confirmed": bool(is_flood),
+            "detection_model_version": 2,
             "detection_reason": detection_reason or "none",
             "traffic_eps": round(float(traffic_metrics.get('accepted_eps', 0.0)), 2),
             "flow_eps": round(float(traffic_metrics.get('max_flow_eps', 0.0)), 2),
@@ -204,7 +206,7 @@ def conectar_servicios():
     return r, es
 
 def purge_trash_events(es):
-    """Elimina históricos TEST y eventos sin extremos 0.0.0.0 → 0.0.0.0."""
+    """Elimina históricos TEST, flujos 0.0.0.0 y falsos DoS del detector anterior."""
     query = {
         "query": {
             "bool": {
@@ -250,6 +252,24 @@ def purge_trash_events(es):
                             "must_not": [{"exists": {"field": "dos_confirmed"}}],
                         }
                     },
+                    {
+                        "bool": {
+                            "filter": [
+                                {"term": {"dos_confirmed": True}},
+                                {
+                                    "bool": {
+                                        "should": [
+                                            {"term": {"protocol": "icmp"}},
+                                            {"match_phrase": {"message": "SIS ICMP detectado"}},
+                                            {"match_phrase": {"raw_log": "SIS ICMP detectado"}},
+                                        ],
+                                        "minimum_should_match": 1,
+                                    }
+                                },
+                            ],
+                            "must_not": [{"exists": {"field": "detection_model_version"}}],
+                        }
+                    },
                 ],
                 "minimum_should_match": 1,
             }
@@ -271,6 +291,54 @@ def purge_trash_events(es):
         return 0
 
 
+_SNORT_TIMESTAMP_RE = re.compile(
+    r"(?<!\d)(\d{2})/(\d{2})-(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?"
+)
+
+
+def _event_epoch(event, message_raw, now=None):
+    """Uses sensor time first so replayed log backlogs are not treated as live bursts."""
+    now = time.time() if now is None else now
+    text = str(message_raw)
+    match = _SNORT_TIMESTAMP_RE.search(text)
+    if match:
+        month, day, hour, minute, second, fraction = match.groups()
+        microsecond = int((fraction or "0").ljust(6, "0")[:6])
+        current = datetime.fromtimestamp(now, timezone.utc)
+        candidate = datetime(
+            current.year,
+            int(month),
+            int(day),
+            int(hour),
+            int(minute),
+            int(second),
+            microsecond,
+            tzinfo=timezone.utc,
+        )
+        if candidate.timestamp() > now + 86400:
+            candidate = candidate.replace(year=current.year - 1)
+        return candidate.timestamp()
+
+    zeek_payload = message_raw if isinstance(message_raw, dict) else {}
+    if isinstance(message_raw, str):
+        try:
+            zeek_payload = json.loads(message_raw)
+        except (TypeError, json.JSONDecodeError):
+            pass
+    try:
+        return float(zeek_payload.get("ts"))
+    except (AttributeError, TypeError, ValueError):
+        pass
+
+    timestamp = event.get("@timestamp")
+    if timestamp:
+        try:
+            return datetime.fromisoformat(str(timestamp).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            pass
+    return now
+
+
 def normalizar_evento(raw_json):
     try:
         event = json.loads(raw_json)
@@ -288,8 +356,13 @@ def normalizar_evento(raw_json):
         if is_legacy_test_alert(message_raw) or is_legacy_test_alert(event):
             return None
 
+        now_epoch = time.time()
+        event_epoch = _event_epoch(event, message_raw, now=now_epoch)
+        if event_epoch < now_epoch - EVENT_MAX_INGEST_AGE_SECONDS or event_epoch > now_epoch + 5:
+            return None
         doc = {
-            "@timestamp": datetime.now().isoformat(),
+            "@timestamp": datetime.fromtimestamp(event_epoch, timezone.utc).isoformat(),
+            "_event_epoch": event_epoch,
             "raw_log": str(message_raw)[:500],
             "src_ip": "0.0.0.0", "dst_ip": "0.0.0.0", "dst_port": 0,
             "protocol": "unknown", "source": "unknown", "comando_humano": "N/A"
@@ -386,6 +459,7 @@ def reset_brain_state():
     return {
         "traffic_monitor": TrafficRateMonitor(),
         "baseline_model": TrafficBaselineModel(),
+        "replay_guard": EventReplayGuard(),
         "alert_cooldown": {},
         "last_print_time": time.time(),
         "direct_log_offsets": {},
@@ -477,6 +551,7 @@ def main():
     state = reset_brain_state()
     traffic_monitor = state["traffic_monitor"]
     baseline_model = state["baseline_model"]
+    replay_guard = state["replay_guard"]
     alert_cooldown = state["alert_cooldown"]
     last_print_time = state["last_print_time"]
     direct_log_offsets = state["direct_log_offsets"]
@@ -494,6 +569,7 @@ def main():
                 state = reset_brain_state()
                 traffic_monitor = state["traffic_monitor"]
                 baseline_model = state["baseline_model"]
+                replay_guard = state["replay_guard"]
                 alert_cooldown = state["alert_cooldown"]
                 last_print_time = state["last_print_time"]
                 direct_log_offsets = state["direct_log_offsets"]
@@ -512,6 +588,7 @@ def main():
 
                 traffic_monitor = state["traffic_monitor"]
                 baseline_model = state["baseline_model"]
+                replay_guard = state["replay_guard"]
                 alert_cooldown = state["alert_cooldown"]
                 last_print_time = state["last_print_time"]
                 direct_log_offsets = state["direct_log_offsets"]
@@ -566,7 +643,7 @@ def main():
             normalized_events = []
             for raw_json in batch_raw:
                 doc = normalizar_evento(raw_json)
-                if doc:
+                if doc and replay_guard.accept(raw_json):
                     normalized_events.append((raw_json, doc))
             if not normalized_events:
                 continue
@@ -619,6 +696,7 @@ def main():
                         send_email_alert(subject, body, level="CRITICAL")
                         alert_cooldown[attacker_ip] = now
 
+                final_doc.pop("_event_epoch", None)
                 actions_bulk.append({"_index": INDEX_NAME, "_source": final_doc})
 
             if actions_bulk:

@@ -69,10 +69,23 @@ def is_legacy_unconfirmed_flood(value) -> bool:
     return message == LEGACY_GLOBAL_FLOOD_MESSAGE and "dos_confirmed" not in value
 
 
+def is_legacy_icmp_flood(value) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    text = f"{value.get('message', '')} {value.get('raw_log', '')}".lower()
+    is_icmp = str(value.get("protocol", "")).lower() == "icmp" or "sis icmp detectado" in text
+    return (
+        value.get("dos_confirmed") is True
+        and is_icmp
+        and "detection_model_version" not in value
+    )
+
+
 def is_visible_event(value) -> bool:
     return (
         not contains_ipv6(value)
         and not is_legacy_test_alert(value)
         and not is_unspecified_traffic(value)
         and not is_legacy_unconfirmed_flood(value)
+        and not is_legacy_icmp_flood(value)
     )

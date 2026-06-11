@@ -1,12 +1,14 @@
 import json
 import sys
+import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 CEREBRO_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CEREBRO_DIR))
 
-from main import normalizar_evento
+from main import _event_epoch, normalizar_evento
 
 
 class EventNormalizationTests(unittest.TestCase):
@@ -55,6 +57,26 @@ class EventNormalizationTests(unittest.TestCase):
             "log": {"file": {"path": "/logs/snort/alert"}},
             "fields": {"source_type": "snort"},
             "message": "[**] malformed event [**] 0.0.0.0 -> 0.0.0.0",
+        }
+        self.assertIsNone(normalizar_evento(json.dumps(event)))
+
+    def test_zeek_epoch_is_preserved_as_source_time(self):
+        now = time.time()
+        message = {"ts": now - 2, "id.orig_h": "192.168.1.1", "id.resp_h": "192.168.1.2"}
+        self.assertAlmostEqual(now - 2, _event_epoch({}, message, now=now), places=3)
+
+    def test_recent_snort_timestamp_is_preserved_as_source_time(self):
+        now = time.time()
+        stamp = datetime.fromtimestamp(now - 2, timezone.utc).strftime("%m/%d-%H:%M:%S.%f")
+        parsed = _event_epoch({}, f"{stamp} [**] SIS ICMP detectado", now=now)
+        self.assertAlmostEqual(now - 2, parsed, delta=1)
+
+    def test_stale_snort_replay_is_discarded(self):
+        stale = datetime.fromtimestamp(time.time() - 600, timezone.utc).strftime("%m/%d-%H:%M:%S.%f")
+        event = {
+            "log": {"file": {"path": "/logs/snort/alert"}},
+            "fields": {"source_type": "snort"},
+            "message": f"{stale} [**] [1:1100802:1] SIS ICMP detectado [**] {{ICMP}} 192.168.1.88 -> 192.168.1.83",
         }
         self.assertIsNone(normalizar_evento(json.dumps(event)))
 

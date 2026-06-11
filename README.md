@@ -539,3 +539,9 @@ Los eventos cuyo origen y destino sean simultáneamente `0.0.0.0` se consideran 
 ### Afinación de IA y detección DoS
 
 La detección DoS ya no utiliza el volumen global del sistema para clasificar cada evento. Cerebro calcula tasas sobre una ventana móvil de cinco segundos y exige concentración por flujo o destino, o una firma DoS explícita. El modelo IsolationForest usa tasas logarítmicas estables (EPS aceptados, EPS del flujo dominante, pares únicos y proporción IDS), no aprende ventanas de ataque como tráfico normal y solo aporta evidencia secundaria al riesgo. Una desviación de IA por sí sola no puede convertir ICMP normal en DoS crítico. El fallback directo de logs queda deshabilitado por defecto para evitar duplicar eventos que ya entrega Filebeat.
+
+#### Protección contra replay y pings normales
+
+Cerebro conserva la hora producida por el sensor (campo `ts` de Zeek, encabezado temporal de Snort o `@timestamp`) en vez de convertir cada registro recibido en un evento nuevo. Los registros con más de `SIS_EVENT_MAX_INGEST_AGE_SECONDS` de antigüedad se descartan durante la ingestión y los duplicados exactos se suprimen durante `SIS_EVENT_DEDUP_TTL_SECONDS`. Esto evita que una relectura de Filebeat o un lote atrasado se interprete como miles de paquetes ocurridos en el mismo instante.
+
+ICMP utiliza umbrales independientes y deliberadamente superiores (`SIS_FLOOD_ICMP_MIN_EVENTS` y `SIS_FLOOD_ICMP_MIN_EPS`). Los ping request/reply normales siguen visibles como eventos `SIS ICMP detectado`, pero no se convierten en una inundación confirmada. El dashboard oculta y Cerebro purga los falsos positivos ICMP generados por la versión anterior del detector; las detecciones nuevas llevan `detection_model_version` para distinguirlas de ese historial.

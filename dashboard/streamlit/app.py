@@ -166,6 +166,24 @@ def get_data(minutes=60, start=None, end=None, limit=5000):
                             "must_not": [{"exists": {"field": "dos_confirmed"}}],
                         }
                     },
+                    {
+                        "bool": {
+                            "filter": [
+                                {"term": {"dos_confirmed": True}},
+                                {
+                                    "bool": {
+                                        "should": [
+                                            {"term": {"protocol": "icmp"}},
+                                            {"match_phrase": {"message": "SIS ICMP detectado"}},
+                                            {"match_phrase": {"raw_log": "SIS ICMP detectado"}},
+                                        ],
+                                        "minimum_should_match": 1,
+                                    }
+                                },
+                            ],
+                            "must_not": [{"exists": {"field": "detection_model_version"}}],
+                        }
+                    },
                 ],
             }
         },
