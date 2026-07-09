@@ -1,0 +1,2 @@
+alert tcp any any -> any 3389 (msg:"SIS Windows RDP detectado"; flags:S; sid:1100301; rev:1;)
+alert tcp any any -> any 445 (msg:"SIS Windows SMB detectado"; flow:to_server; sid:1100302; rev:1;)

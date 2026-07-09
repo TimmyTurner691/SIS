@@ -1,0 +1,2 @@
+alert tcp any any -> any 445 (msg:"SIS SMB negociacion detectada"; content:"|ff|SMB"; sid:1100701; rev:1;)
+alert tcp any any -> any 445 (msg:"SIS SMB2 negociacion detectada"; content:"|fe|SMB"; sid:1100702; rev:1;)

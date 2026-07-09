@@ -521,3 +521,33 @@ Se recomienda agregar aquí la licencia del proyecto si se desea formalizar su d
 ## Licencia / uso
 
 Se recomienda agregar aquí la licencia del proyecto si se desea formalizar su distribución, reutilización o presentación pública.
+
+## Gestión modular de firmas
+
+La pestaña **✍️ Firmas / Reglas** permite instalar, habilitar y deshabilitar los paquetes IEC-104, Modbus, IEC-61850, Windows, Linux, Web, DNS, SMB y Otros. También ofrece los perfiles **OT eléctrico**, **TI Windows**, **Linux/Web** y **Mixto liviano** como punto de partida editable.
+
+El catálogo y los perfiles viven en `reglas_firmas/catalog.json` y `reglas_firmas/profiles.json`. Al aplicar una selección, el dashboard valida la estructura y los SIDs, genera atómicamente `reglas_firmas/control/effective.rules` y solicita la recarga. El contenedor Snort ejecuta después `snort -T` sobre el candidato; solo si la validación nativa termina correctamente reemplaza `active.rules` y reinicia el proceso del sensor, sin reiniciar Redis, Elasticsearch, el núcleo ni el dashboard. Si la validación falla, conserva el set activo anterior y publica el motivo en la GUI.
+
+### Alcance IPv4 y limpieza de reglas heredadas
+
+SIS descarta eventos IPv6 durante la normalización central, antes de enriquecerlos o almacenarlos en Elasticsearch. El dashboard también excluye resultados IPv6 históricos de todas las vistas operativas. Al iniciar o recargar Snort se elimina automáticamente la antigua firma de prueba SID `1000005` (`[TEST] Ping Detectado en WiFi`) de cualquier `active.rules` persistente, sin alterar los demás paquetes seleccionados.
+
+Al conectar con Elasticsearch, Cerebro elimina selectivamente los documentos históricos que contengan el SID `1000005` o el mensaje `Ping Detectado en WiFi`. La limpieza no afecta a la firma vigente `SIS ICMP detectado` (SID `1100802`).
+
+Los eventos cuyo origen y destino sean simultáneamente `0.0.0.0` se consideran tráfico basura. Cerebro los descarta antes de indexarlos, elimina los históricos existentes al iniciar y el dashboard los excluye de todas las vistas, incluida **Logs Raw**. Un único extremo `0.0.0.0` no activa este filtro.
+
+### Afinación de IA y detección DoS
+
+La detección DoS ya no utiliza el volumen global del sistema para clasificar cada evento. Cerebro calcula tasas sobre una ventana móvil de cinco segundos y exige concentración por flujo o destino, o una firma DoS explícita. El modelo IsolationForest usa tasas logarítmicas estables (EPS aceptados, EPS del flujo dominante, pares únicos y proporción IDS), no aprende ventanas de ataque como tráfico normal y solo aporta evidencia secundaria al riesgo. Una desviación de IA por sí sola no puede convertir ICMP normal en DoS crítico. El fallback directo de logs queda deshabilitado por defecto para evitar duplicar eventos que ya entrega Filebeat.
+
+#### Protección contra replay y pings normales
+
+Cerebro conserva por separado la hora producida por el sensor (campo `ts` de Zeek o encabezado temporal de Snort) y la hora de ingestión entregada por Filebeat. La hora de ingestión mantiene los eventos disponibles en las vistas en vivo; la hora del sensor se utiliza exclusivamente para decidir si un registro puede participar en la tasa de una inundación. Los registros atrasados siguen visibles e indexados, pero no pueden convertirse en un falso pico de tráfico. Además, los duplicados exactos se suprimen durante `SIS_EVENT_DEDUP_TTL_SECONDS`.
+
+ICMP utiliza umbrales independientes y deliberadamente superiores (`SIS_FLOOD_ICMP_MIN_EVENTS` y `SIS_FLOOD_ICMP_MIN_EPS`). Los ping request/reply normales siguen visibles como eventos `SIS ICMP detectado`, pero no se convierten en una inundación confirmada. El dashboard oculta y Cerebro purga los falsos positivos ICMP generados por la versión anterior del detector; las detecciones nuevas llevan `detection_model_version` para distinguirlas de ese historial.
+
+### Bloques SID de los paquetes
+
+Las firmas administradas por SIS usan bloques base de 100 SIDs por categoría dentro del espacio local `1100000-1100899`, con rangos de expansión explícitos cuando una categoría supera esa capacidad. El paquete DNS reserva `1100601-1100699`; sus 55 reglas actuales ocupan consecutivamente `1100601-1100655`. Este bloque cubre consultas inusuales, transferencia de zona, amplificación, tasas elevadas, descubrimiento, DNS dinámico, servicios de túnel, indicadores de exfiltración y patrones de tunneling. Las pruebas del catálogo rechazan duplicados globales y reglas ubicadas fuera de los rangos asignados a su paquete.
+
+El paquete IEC-104 conserva los SIDs iniciales `1100001-1100002` para compatibilidad y reserva `1110001-1110199` para su expansión. Las 106 firmas ampliadas ocupan `1110001-1110106` y cubren APCI/U-frames, Type IDs de telemetría y control, interrogación, sincronización, reset, causas de transmisión, tipos reservados y tasa elevada de APDUs. Los SIDs `1200xxx` de la propuesta original no se usan para evitar mezclar espacios no administrados con los bloques SIS.

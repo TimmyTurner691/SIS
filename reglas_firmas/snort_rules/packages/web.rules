@@ -1,0 +1,2 @@
+alert tcp any any -> any [80,8080,8000] (msg:"SIS Web intento traversal"; content:"../"; http_uri; sid:1100501; rev:1;)
+alert tcp any any -> any [80,443,8080] (msg:"SIS Web SQL injection basica"; content:"union select"; nocase; sid:1100502; rev:1;)

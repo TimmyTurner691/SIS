@@ -28,10 +28,12 @@ services:
       SIS_CAPTURE_INTERFACE: ${SIS_CAPTURE_INTERFACE:-lo}
       SIS_SENSOR_MODE: ${SIS_SENSOR_MODE:-demo}
       SIS_SENSOR_PROMISCUOUS: ${SIS_SENSOR_PROMISCUOUS:-true}
+      SIS_SIGNATURES_DIR: /signatures
     volumes:
       - ${SIS_SNORT_LOGS_PATH:-./logs/logs_snort}:/var/log/snort
       - ${SIS_SNORT_CONF_PATH:-./configuracion/snort/snort.conf}:/etc/snort/snort.conf:ro
-      - ${SIS_SNORT_RULES_PATH:-./reglas_firmas/snort_rules}:/etc/snort/rules:ro
+      - ${SIS_SNORT_RULES_PATH:-./reglas_firmas/snort_rules}:/etc/snort/rules
+      - ./reglas_firmas:/signatures
       - ${SIS_SENSOR_HEALTH_PATH:-./logs/sensor_health}:/sensor-health
     restart: unless-stopped
     security_opt:
@@ -102,8 +104,20 @@ services:
       SIS_DISCOVERY_NMAP_TIMEOUT: ${SIS_DISCOVERY_NMAP_TIMEOUT:-60}
       SIS_DISCOVERY_PURGE_LEGACY_INDEXES_ON_START: ${SIS_DISCOVERY_PURGE_LEGACY_INDEXES_ON_START:-true}
       SIS_DISCOVERY_PURGE_LEGACY_INDEXES: ${SIS_DISCOVERY_PURGE_LEGACY_INDEXES:-sis-discovered-assets-v1,sis-discovered-assets-v2}
-      SIS_DIRECT_LOG_POLL_ENABLED: ${SIS_DIRECT_LOG_POLL_ENABLED:-true}
+      SIS_DIRECT_LOG_POLL_ENABLED: ${SIS_DIRECT_LOG_POLL_ENABLED:-false}
       SIS_DIRECT_LOG_POLL_INTERVAL: ${SIS_DIRECT_LOG_POLL_INTERVAL:-1.0}
+      SIS_FLOOD_WINDOW_SECONDS: ${SIS_FLOOD_WINDOW_SECONDS:-5}
+      SIS_FLOOD_FLOW_MIN_EVENTS: ${SIS_FLOOD_FLOW_MIN_EVENTS:-120}
+      SIS_FLOOD_FLOW_MIN_EPS: ${SIS_FLOOD_FLOW_MIN_EPS:-20}
+      SIS_FLOOD_DESTINATION_MIN_EVENTS: ${SIS_FLOOD_DESTINATION_MIN_EVENTS:-250}
+      SIS_FLOOD_DESTINATION_MIN_EPS: ${SIS_FLOOD_DESTINATION_MIN_EPS:-40}
+      SIS_FLOOD_ICMP_MIN_EVENTS: ${SIS_FLOOD_ICMP_MIN_EVENTS:-1000}
+      SIS_FLOOD_ICMP_MIN_EPS: ${SIS_FLOOD_ICMP_MIN_EPS:-150}
+      SIS_FLOOD_MAX_EVENT_LAG_SECONDS: ${SIS_FLOOD_MAX_EVENT_LAG_SECONDS:-30}
+      SIS_EVENT_DEDUP_TTL_SECONDS: ${SIS_EVENT_DEDUP_TTL_SECONDS:-600}
+      SIS_AI_MIN_BASELINE_SAMPLES: ${SIS_AI_MIN_BASELINE_SAMPLES:-30}
+      SIS_AI_BASELINE_WINDOW: ${SIS_AI_BASELINE_WINDOW:-300}
+      SIS_AI_CONTAMINATION: ${SIS_AI_CONTAMINATION:-0.02}
       SIS_INVENTORY_PATH: ${SIS_INVENTORY_PATH:-/app/ot_inventory.json}
       SIS_SMTP_SERVER: ${SIS_SMTP_SERVER:-}
       SIS_SMTP_PORT: ${SIS_SMTP_PORT:-587}
@@ -142,11 +156,13 @@ services:
       SIS_DASHBOARD_DISCOVERED_ASSETS_INDEX: ${SIS_DISCOVERED_ASSETS_INDEX:-sis-discovered-assets-v3}
       SIS_DASHBOARD_INVENTORY_PATH: ${SIS_DASHBOARD_INVENTORY_PATH:-/app/ot_inventory.json}
       SIS_SENSOR_HEALTH_DIR: /sensor-health
+      SIS_SIGNATURES_DIR: /signatures
     volumes:
       - ./dashboard/streamlit:/app
       - ${SIS_SNORT_LOGS_PATH:-./logs/logs_snort}:/var/log/snort:ro
       - ${SIS_ZEEK_LIVE_LOGS_PATH:-./logs/logs_zeek/logs/live}:/var/log/zeek:ro
       - ${SIS_SENSOR_HEALTH_PATH:-./logs/sensor_health}:/sensor-health:ro
+      - ./reglas_firmas:/signatures
       - ./ot_inventory.json:/app/ot_inventory.json
       - ./ot_inventory.json:/app/ot_inventory.json
     ports:

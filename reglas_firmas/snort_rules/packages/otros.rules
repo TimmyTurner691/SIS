@@ -1,0 +1,2 @@
+alert tcp any any -> any any (msg:"SIS exploit generico detectado"; content:"exploit"; nocase; sid:1100801; rev:1;)
+alert icmp any any -> any any (msg:"SIS ICMP detectado"; sid:1100802; rev:1;)

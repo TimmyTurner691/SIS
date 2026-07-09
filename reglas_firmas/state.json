@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "profile": "ot-electrico",
+  "packages": {
+    "iec104": {"installed": true, "enabled": true},
+    "modbus": {"installed": true, "enabled": true},
+    "iec61850": {"installed": true, "enabled": true},
+    "windows": {"installed": true, "enabled": false},
+    "linux": {"installed": true, "enabled": false},
+    "web": {"installed": true, "enabled": false},
+    "dns": {"installed": true, "enabled": true},
+    "smb": {"installed": true, "enabled": false},
+    "otros": {"installed": true, "enabled": false}
+  }
+}

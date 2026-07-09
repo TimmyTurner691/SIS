@@ -1,0 +1,2 @@
+alert tcp any any -> any 502 (msg:"SIS Modbus escritura de bobina"; content:"|05|"; offset:7; depth:1; sid:1100101; rev:1;)
+alert tcp any any -> any 502 (msg:"SIS Modbus escritura de registros"; content:"|10|"; offset:7; depth:1; sid:1100102; rev:1;)
