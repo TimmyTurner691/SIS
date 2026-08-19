@@ -1,6 +1,7 @@
 import RiskDashboard from "./RiskDashboard";
 import DiscoveredAssets from "./DiscoveredAssets";
 
+
 export default function Home() {
   return (
     <div className="p-8 max-w-6xl mx-auto">

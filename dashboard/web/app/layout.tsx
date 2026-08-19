@@ -4,6 +4,7 @@ import Link from "next/link";
 import Image from "next/image";
 import CommandCenter from "./CommandCenter";
 import SensorStatus from "./SensorStatus";
+import SystemHealth from "./SystemHealth";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -33,12 +34,12 @@ export default function RootLayout({
     >
       <body className="min-h-full flex bg-[#111827] text-gray-200">
         <aside className="w-64 flex-shrink-0 bg-[#1a2235] border-r border-gray-800/50 flex flex-col fixed h-full z-10">
-          <div className="h-40 flex items-center justify-center p-2 border-b border-gray-800/50 shrink-0">
+          <div className="h-48 flex items-center justify-center p-2 border-b border-gray-800/50 shrink-0">
             <Image
               src="/logo-sis-vertical.png"
               alt="SIS Logo Vertical"
-              width={200}
-              height={140}
+              width={240}
+              height={160}
               className="object-contain h-full w-auto"
               priority
             />
@@ -72,6 +73,7 @@ export default function RootLayout({
               Ataques Simulados
             </Link>
           </nav>
+          <SystemHealth />
           <CommandCenter />
         </aside>
         <main className="flex-1 ml-64 min-h-screen">{children}</main>
