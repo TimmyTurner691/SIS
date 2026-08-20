@@ -1,6 +1,7 @@
 import RiskDashboard from "./RiskDashboard";
 import DiscoveredAssets from "./DiscoveredAssets";
 import CriticalFeed from "./CriticalFeed";
+import AlertConfig from "./AlertConfig";
 
 export default function Home() {
   return (
@@ -12,8 +13,13 @@ export default function Home() {
 
       <RiskDashboard />
 
-      <div className="mt-8">
-        <CriticalFeed />
+      <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="md:col-span-2">
+          <CriticalFeed />
+        </div>
+        <div className="md:col-span-1">
+          <AlertConfig />
+        </div>
       </div>
     </div>
   );

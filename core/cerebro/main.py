@@ -20,8 +20,10 @@ warnings.filterwarnings("ignore", category=ElasticsearchWarning)
 try:
     from utils_alert import send_email_alert
 except ImportError:
-    def send_email_alert(subject, body, level):
-        print(f"📧 [EMAIL SIMULADO] {subject}", flush=True)
+    # Agregamos los parámetros opcionales aquí también para que no de error
+    def send_email_alert(subject, body, level="INFO", receiver_email=None):
+        destino = receiver_email if receiver_email else "DEFAULT"
+        print(f"📧 [EMAIL SIMULADO] {subject} -> Para: {destino}", flush=True)
 
 # ================= CONFIGURACIÓN NITRO =================
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
@@ -449,6 +451,20 @@ def main():
                 time.sleep(1)
                 continue
 
+            # --- NUEVO: Escuchar comando para correo de prueba ---
+            if r.exists("cmd_send_test_email"):
+                correo_prueba = r.get("sis_alert_email")
+                if correo_prueba:
+                    print(f"📧 [COMANDO] Enviando correo de confirmación a {correo_prueba}...", flush=True)
+                    asunto = "✅ SIEM OT: Correo Enlazado Correctamente"
+                    cuerpo = "Este es un mensaje automático de confirmación.\n\nTu dashboard SIEM ahora está configurado para enviar las alertas críticas de Ciberseguridad OT/IT a este correo.\n\nEl sistema está activo y monitoreando."
+                    
+                    # Usamos tu función para enviarlo
+                    send_email_alert(asunto, cuerpo, level="INFO", receiver_email=correo_prueba)
+                
+                # Borramos la orden para que no lo mande repetido
+                r.delete("cmd_send_test_email")
+
             # 2. Reset Demo Total
             if r.exists("cmd_full_reset_demo"):
                 state = full_reset_demo(es, r, engine)
@@ -565,7 +581,18 @@ def main():
                     if (now - alert_cooldown.get(ip_atacante, 0)) > 60:
                         asunto = f"🚨 {final_doc.get('mitre_msg')}"
                         cuerpo = f"CRÍTICO Detectado\nEPS: {current_eps:.1f}\nIP: {ip_atacante}"
-                        send_email_alert(asunto, cuerpo, level="CRITICAL")
+                        
+                        # --- NUEVA LÓGICA DE CORREO DINÁMICO ---
+                        try:
+                            # Intentamos obtener el correo configurado en el dashboard web
+                            correo_dinamico = r.get("sis_alert_email")
+                        except:
+                            correo_dinamico = None
+                            
+                        # Llamamos a la función pasándole el correo extraído
+                        send_email_alert(asunto, cuerpo, level="CRITICAL", receiver_email=correo_dinamico)
+                        # ---------------------------------------
+                        
                         alert_cooldown[ip_atacante] = now
 
                 actions_bulk.append({"_index": INDEX_NAME, "_source": final_doc})

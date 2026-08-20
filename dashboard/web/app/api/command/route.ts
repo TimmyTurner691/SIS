@@ -18,14 +18,14 @@ export async function POST(req: NextRequest) {
       await redis.set("cmd_reset_brain", "true");
       await redis.del("sis_queue");
       return NextResponse.json({ success: true, message: "Operación exitosa: reset_ia", instruction });
-    } 
-    
+    }
+
     if (instruction === "reset_demo") {
       await redis.set("cmd_full_reset_demo", "true");
       await redis.del("sis_queue");
       return NextResponse.json({ success: true, message: "Operación exitosa: reset_demo", instruction });
-    } 
-    
+    }
+
     if (instruction === "force_train") {
       await redis.set("cmd_force_train", "true");
       return NextResponse.json({ success: true, message: "Operación exitosa: force_train", instruction });
