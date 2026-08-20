@@ -49,12 +49,13 @@ export default function AlertConfig() {
     };
 
     return (
-        <div className="bg-[#1a2235] rounded-lg border border-gray-800/50 border-t-2 border-t-[#5F13CF] p-6 shadow-lg max-w-md">
-            <h2 className="text-lg font-semibold text-gray-200 flex items-center">
-                <span className="mr-2">📧</span> Notificaciones Críticas
+        <div className="bg-[#1a2235] rounded-lg border border-gray-800/50 border-t-2 border-t-[#5F13CF] p-4 shadow-lg w-full">
+            <h2 className="text-base font-semibold text-gray-200 flex items-center gap-2">
+                <span className="shrink-0 text-lg">📧</span>
+                <span>Notificaciones SIS</span>
             </h2>
-            <p className="text-xs text-gray-400 mt-1 mb-4">
-                Destinatario de avisos por incidentes SCADA de alto impacto.
+            <p className="text-xs text-gray-400 mt-1 mb-4 leading-relaxed">
+                E-mail para recibir avisos de incidentes SCADA de alto impacto.
             </p>
 
             <div className="flex flex-col space-y-3">
@@ -70,8 +71,8 @@ export default function AlertConfig() {
                     onClick={handleSave}
                     disabled={loading}
                     className={`w-full py-2 rounded text-sm font-medium transition-colors ${loading
-                            ? "bg-gray-700 text-gray-400 cursor-not-allowed"
-                            : "bg-[#5F13CF] text-white hover:bg-[#7221e6]"
+                        ? "bg-gray-700 text-gray-400 cursor-not-allowed"
+                        : "bg-[#5F13CF] text-white hover:bg-[#7221e6]"
                         }`}
                 >
                     {loading ? "Guardando..." : "Guardar Configuración"}
