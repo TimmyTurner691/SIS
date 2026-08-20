@@ -1,92 +1,77 @@
-import { NextResponse } from "next/server";
-import { Client } from "@elastic/elasticsearch";
+import { NextResponse } from 'next/server';
+import { Client } from '@elastic/elasticsearch';
 
-const ES_HOST = process.env.SIS_DASHBOARD_ELASTIC_HOST || "elasticsearch";
-const ES_PORT = process.env.SIS_DASHBOARD_ELASTIC_PORT || "9200";
-const INDEX_NAME = process.env.SIS_DASHBOARD_INDEX || "sis-logs-v1";
-
-const client = new Client({
-  node: `http://${ES_HOST}:${ES_PORT}`,
+// Conexión segura usando variables de entorno
+const es = new Client({
+  node: `http://${process.env.SIS_DASHBOARD_ELASTIC_HOST || 'elasticsearch'}:${process.env.SIS_DASHBOARD_ELASTIC_PORT || '9200'}`
 });
 
 export async function GET() {
   try {
-    const response = await client.search({
-      index: INDEX_NAME,
-      body: {
-        query: {
-          range: {
-            "@timestamp": {
-              gte: "now-60m", // Últimos 60 minutos
-            },
-          },
-        },
-        aggs: {
-          max_risk: { max: { field: "risk_total_score" } },
-          critical_incidents: {
-            filter: { range: { risk_total_score: { gte: 17 } } },
-          },
-          unique_dst_ips: { cardinality: { field: "dst_ip.keyword" } },
-          impact_matrix: {
-            terms: { field: "risk_impact", size: 10 },
-            aggs: {
-              probability: {
-                terms: { field: "risk_probability", size: 10 },
-              },
-            },
-          },
-        },
-        size: 0, // No necesitamos los documentos crudos, solo los KPIs (agregaciones)
-      },
+    // Traemos los últimos 1000 eventos para calcular las métricas recientes
+    const res = await es.search({
+      index: process.env.SIS_INDEX_NAME || 'sis-logs-v1',
+      size: 1000,
+      sort: [{ '@timestamp': { order: 'desc' } }]
     });
 
-    // Compatibilidad para @elastic/elasticsearch v7 o v8
-    const aggs = (response.aggregations || (response as any).body?.aggregations) as any;
+    const hits = res.hits.hits.map((h: any) => h._source);
 
-    const maxRisk = aggs?.max_risk?.value || 0;
-    const criticalIncidents = aggs?.critical_incidents?.doc_count || 0;
-    const uniqueDstIps = aggs?.unique_dst_ips?.value || 0;
+    let maxRisk = 0;
+    let criticalIncidents = 0;
+    const uniqueIps = new Set<string>();
 
-    // Procesar los resultados de la matriz de riesgo agrupada
-    const matrix = [];
-    if (aggs?.impact_matrix?.buckets) {
-      for (const impactBucket of aggs.impact_matrix.buckets) {
-        if (impactBucket.probability && impactBucket.probability.buckets) {
-          for (const probBucket of impactBucket.probability.buckets) {
-            matrix.push({
-              impact: impactBucket.key,
-              probability: probBucket.key,
-              count: probBucket.doc_count,
-            });
-          }
+    // Objeto temporal para contar cuántos eventos caen en cada celda de la matriz
+    const matrixMap: Record<string, number> = {};
+
+    hits.forEach((doc: any) => {
+      // 1. Extraer los valores (con valores por defecto por seguridad)
+      const impact = doc.risk_impact || 1;
+      const prob = doc.risk_probability || 1;
+      const score = doc.risk_total_score || (impact * prob);
+      const label = doc.risk_label || "BAJO";
+
+      // 2. Calcular KPIs
+      if (score > maxRisk) maxRisk = score;
+
+      // Contamos como crítico si la etiqueta es CRÍTICO o el score >= 17
+      if (label === 'CRÍTICO' || score >= 17) {
+        criticalIncidents++;
+        if (doc.dst_ip && doc.dst_ip !== "0.0.0.0") {
+          uniqueIps.add(doc.dst_ip);
         }
       }
-    }
 
+      // 3. Agrupar para la Matriz de Calor
+      const key = `${impact}-${prob}`;
+      matrixMap[key] = (matrixMap[key] || 0) + 1;
+    });
+
+    // 4. Formatear la matriz como lo espera tu frontend
+    const matrix = Object.keys(matrixMap).map(key => {
+      const [i, p] = key.split('-');
+      return {
+        impact: Number(i),
+        probability: Number(p),
+        count: matrixMap[key]
+      };
+    });
+
+    // Devolvemos el JSON exactamente con la interfaz AlertsData que definiste
     return NextResponse.json({
       success: true,
       data: {
         maxRisk,
         criticalIncidents,
-        uniqueDstIps,
-        matrix,
-      },
+        uniqueDstIps: uniqueIps.size,
+        matrix
+      }
     });
-  } catch (error: any) {
+
+  } catch (error) {
     console.error("Error consultando Elastic:", error);
-    
-    // Se devuelve un payload limpio de fallbacks para que el frontend no rompa si Elastic falla
     return NextResponse.json(
-      {
-        success: false,
-        error: error.message,
-        data: {
-          maxRisk: 0,
-          criticalIncidents: 0,
-          uniqueDstIps: 0,
-          matrix: [],
-        },
-      },
+      { success: false, error: 'Error conectando a Elasticsearch' },
       { status: 500 }
     );
   }

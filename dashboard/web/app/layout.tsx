@@ -5,6 +5,7 @@ import Image from "next/image";
 import CommandCenter from "./CommandCenter";
 import SensorStatus from "./SensorStatus";
 import SystemHealth from "./SystemHealth";
+import ServiceStatus from "./ServiceStatus";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -33,6 +34,7 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} dark antialiased h-full`}
     >
       <body className="min-h-full flex bg-[#111827] text-gray-200">
+        <ServiceStatus />
         <aside className="w-64 flex-shrink-0 bg-[#1a2235] border-r border-gray-800/50 flex flex-col fixed h-full z-10">
           <div className="h-48 flex items-center justify-center p-2 border-b border-gray-800/50 shrink-0">
             <Image
@@ -65,6 +67,18 @@ export default function RootLayout({
               className="block px-3 py-2 text-sm font-medium rounded-md hover:bg-[#5F13CF]/10 text-gray-400 hover:text-[#5F13CF] transition-colors"
             >
               Inventario OT
+            </Link>
+            <Link
+              href="/scada"
+              className="block px-3 py-2 text-sm font-medium rounded-md hover:bg-[#5F13CF]/10 text-gray-400 hover:text-[#5F13CF] transition-colors"
+            >
+              Telemetría SCADA
+            </Link>
+            <Link
+              href="/raw"
+              className="block px-3 py-2 text-sm font-medium rounded-md hover:bg-[#5F13CF]/10 text-gray-400 hover:text-[#5F13CF] transition-colors"
+            >
+              Logs Raw
             </Link>
           </nav>
           <SystemHealth />

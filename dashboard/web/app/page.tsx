@@ -1,6 +1,6 @@
 import RiskDashboard from "./RiskDashboard";
 import DiscoveredAssets from "./DiscoveredAssets";
-
+import CriticalFeed from "./CriticalFeed";
 
 export default function Home() {
   return (
@@ -11,6 +11,10 @@ export default function Home() {
       </header>
 
       <RiskDashboard />
+
+      <div className="mt-8">
+        <CriticalFeed />
+      </div>
     </div>
   );
 }
