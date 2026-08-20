@@ -130,31 +130,30 @@ services:
     environment:
       - NODE_ENV=development
       # Fuerza el hot-reload en contenedores Linux
-      - WATCHPACK_POLLING=true 
+      - WATCHPACK_POLLING=true
     volumes:
       # Montamos el código local para ver cambios en vivo
       - ./dashboard/web:/app
       # Evitamos sobreescribir los módulos de Node del contenedor
       - /app/node_modules
+      # ---> NUEVA LÍNEA: Permite al dashboard ver el estado de los contenedores <---
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "${SIS_DASHBOARD_PORT:-3000}:3000"
-    # Ahora el dashboard dependerá del cerebro (tu API), no directamente de Elastic
     depends_on:
       - cerebro
     restart: unless-stopped
 
-
   suricata:
     image: jasonish/suricata:7.0
     container_name: siem_suricata
-    profiles: ["suricata"]
+    profiles: [ "suricata" ]
     network_mode: "host"
     cap_add:
       - NET_ADMIN
       - NET_RAW
     command: >
-      suricata -i ${SIS_CAPTURE_INTERFACE:-lo}
-      -l /var/log/suricata
+      suricata -i ${SIS_CAPTURE_INTERFACE:-lo} -l /var/log/suricata
     volumes:
       - ${SIS_SURICATA_LOGS_PATH:-./logs/logs_suricata}:/var/log/suricata
     restart: unless-stopped
@@ -162,7 +161,7 @@ services:
   nginx_proxy:
     image: nginx:1.27-alpine
     container_name: siem_nginx_proxy
-    profiles: ["proxy"]
+    profiles: [ "proxy" ]
     ports:
       - "${SIS_PROXY_PORT:-8080}:80"
     volumes:

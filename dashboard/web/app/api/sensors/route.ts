@@ -1,50 +1,53 @@
 import { NextResponse } from 'next/server';
-import { Client } from '@elastic/elasticsearch';
+import Docker from 'dockerode';
 
-const es = new Client({
-  node: `http://${process.env.SIS_DASHBOARD_ELASTIC_HOST || 'elasticsearch'}:${process.env.SIS_DASHBOARD_ELASTIC_PORT || '9200'}`
-});
+// Inicializamos Dockerode apuntando al socket del sistema operativo (montado vía volumen)
+const docker = new Docker({ socketPath: '/var/run/docker.sock' });
 
-async function getLastSensorLog(sourceName: string) {
+async function getContainerHealth(containerName: string) {
   try {
-    const res = await es.search({
-      index: process.env.SIS_INDEX_NAME || 'sis-logs-v1',
-      size: 1,
-      sort: [{ '@timestamp': { order: 'desc' } }],
-      query: { term: { source: sourceName } }
-    });
+    const container = docker.getContainer(containerName);
+    const info = await container.inspect();
 
-    if (res.hits.hits.length > 0) {
-      const lastLog = res.hits.hits[0]._source as any;
-      return new Date(lastLog['@timestamp']).getTime();
+    // Validamos si el contenedor se encuentra ejecutándose activamente
+    if (info.State && info.State.Running) {
+      const startedAt = new Date(info.State.StartedAt).getTime();
+      const uptimeMs = Date.now() - startedAt;
+      const uptimeMin = Math.floor(uptimeMs / 1000 / 60);
+
+      return {
+        status: 'activo',
+        info: uptimeMin === 0 ? 'Iniciado hace un momento' : `Uptime: ${uptimeMin} min`
+      };
+    } else {
+      return {
+        status: 'caido',
+        info: `Estado: ${info.State?.Status || 'Detenido'}`
+      };
     }
-    return 0;
   } catch (error) {
-    return 0;
+    return {
+      status: 'caido',
+      info: 'Contenedor no encontrado'
+    };
   }
 }
 
 export async function GET() {
-  const now = Date.now();
-  // 5 minutos sin datos = Sensor Caído
-  const UMBRAL_CAIDO_MS = 5 * 60 * 1000;
-
-  const [lastZeek, lastSnort] = await Promise.all([
-    getLastSensorLog('zeek'),
-    getLastSensorLog('snort')
+  // Consultamos en paralelo el estado real de ambos sensores definidos en tu docker-compose
+  const [zeekHealth, snortHealth] = await Promise.all([
+    getContainerHealth('siem_zeek'),
+    getContainerHealth('siem_snort')
   ]);
-
-  const zeekAlive = lastZeek > 0 && (now - lastZeek) < UMBRAL_CAIDO_MS;
-  const snortAlive = lastSnort > 0 && (now - lastSnort) < UMBRAL_CAIDO_MS;
 
   return NextResponse.json({
     zeek: {
-      status: zeekAlive ? "🟢 Activo" : "🔴 Caído",
-      info: zeekAlive ? `Último log: hace ${Math.floor((now - lastZeek) / 1000)}s` : "Sin telemetría"
+      status: zeekHealth.status === 'activo' ? "🟢 Escuchando" : "🔴 Caído",
+      info: zeekHealth.info
     },
     snort: {
-      status: snortAlive ? "🟢 Activo" : "🔴 Caído",
-      info: snortAlive ? `Último log: hace ${Math.floor((now - lastSnort) / 1000)}s` : "Sin telemetría"
+      status: snortHealth.status === 'activo' ? "🟢 Escuchando" : "🔴 Caído",
+      info: snortHealth.info
     }
   });
 }
