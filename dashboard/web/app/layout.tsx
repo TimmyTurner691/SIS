@@ -66,12 +66,6 @@ export default function RootLayout({
             >
               Inventario OT
             </Link>
-            <Link
-              href="/ataques"
-              className="block px-3 py-2 text-sm font-medium rounded-md hover:bg-[#5F13CF]/10 text-gray-400 hover:text-[#5F13CF] transition-colors"
-            >
-              Ataques Simulados
-            </Link>
           </nav>
           <SystemHealth />
           <CommandCenter />
