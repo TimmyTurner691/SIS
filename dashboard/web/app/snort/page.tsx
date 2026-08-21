@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ShieldAlert } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -82,8 +83,9 @@ export default function SnortPage() {
     <div className="p-8 max-w-7xl mx-auto">
       {/* Header */}
       <header className="mb-8">
-        <h1 className="text-2xl font-semibold text-gray-200">
-          🛡️ Sistema de Detección de Intrusos (IDS)
+        <h1 className="text-2xl font-semibold text-gray-200 flex items-center gap-2">
+          <ShieldAlert className="w-6 h-6 text-red-500" />
+          Sistema de Detección de Intrusos (IDS)
         </h1>
         <p className="text-sm text-gray-400 mt-1">
           Alertas Snort capturadas en tiempo real desde el índice{" "}

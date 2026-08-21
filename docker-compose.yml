@@ -12,6 +12,7 @@ services:
       INTERFACE: ${SIS_CAPTURE_INTERFACE:-lo}
       SIS_SENSOR_MODE: ${SIS_SENSOR_MODE:-demo}
       SIS_SENSOR_PROMISCUOUS: ${SIS_SENSOR_PROMISCUOUS:-true}
+      TZ: America/Santiago
     volumes:
       - ${SIS_ZEEK_LOGS_PATH:-./logs/logs_zeek}:/pcap
       - ${SIS_SENSOR_HEALTH_PATH:-./logs/sensor_health}:/sensor-health
@@ -28,6 +29,7 @@ services:
       SIS_CAPTURE_INTERFACE: ${SIS_CAPTURE_INTERFACE:-lo}
       SIS_SENSOR_MODE: ${SIS_SENSOR_MODE:-demo}
       SIS_SENSOR_PROMISCUOUS: ${SIS_SENSOR_PROMISCUOUS:-true}
+      TZ: America/Santiago
     volumes:
       - ${SIS_SNORT_LOGS_PATH:-./logs/logs_snort}:/var/log/snort
       - ${SIS_SNORT_CONF_PATH:-./configuracion/snort/snort.conf}:/etc/snort/snort.conf:ro
@@ -48,6 +50,7 @@ services:
       REDIS_HOST: ${SIS_REDIS_HOST:-redis}
       REDIS_PORT: ${SIS_REDIS_PORT:-6379}
       SIS_REDIS_KEY: ${SIS_REDIS_KEY:-sis_queue}
+      TZ: America/Santiago
     volumes:
       - ./configuracion/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
       - ${SIS_ZEEK_LIVE_LOGS_PATH:-./logs/logs_zeek/logs/live}:/logs/zeek:ro
@@ -73,6 +76,7 @@ services:
     environment:
       discovery.type: single-node
       ES_JAVA_OPTS: ${SIS_ES_JAVA_OPTS:--Xms512m -Xmx512m}
+      TZ: America/Santiago
     ports:
       - "${SIS_ELASTIC_PORT:-9200}:9200"
     volumes:
@@ -111,6 +115,7 @@ services:
       SIS_SMTP_SENDER_PASSWORD: ${SIS_SMTP_SENDER_PASSWORD:-}
       SIS_SMTP_RECEIVER_EMAIL: ${SIS_SMTP_RECEIVER_EMAIL:-}
       SIS_SMTP_USE_TLS: ${SIS_SMTP_USE_TLS:-true}
+      TZ: America/Santiago
     volumes:
       - ./core/cerebro:/app
       - ${SIS_ZEEK_LIVE_LOGS_PATH:-./logs/logs_zeek/logs/live}:/var/log/zeek
@@ -129,33 +134,16 @@ services:
     working_dir: /app
     environment:
       - NODE_ENV=development
-      # Fuerza el hot-reload en contenedores Linux
       - WATCHPACK_POLLING=true
+      - TZ=America/Santiago
     volumes:
-      # Montamos el código local para ver cambios en vivo
       - ./dashboard/web:/app
-      # Evitamos sobreescribir los módulos de Node del contenedor
       - /app/node_modules
-      # ---> NUEVA LÍNEA: Permite al dashboard ver el estado de los contenedores <---
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "${SIS_DASHBOARD_PORT:-3000}:3000"
     depends_on:
       - cerebro
-    restart: unless-stopped
-
-  suricata:
-    image: jasonish/suricata:7.0
-    container_name: siem_suricata
-    profiles: [ "suricata" ]
-    network_mode: "host"
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    command: >
-      suricata -i ${SIS_CAPTURE_INTERFACE:-lo} -l /var/log/suricata
-    volumes:
-      - ${SIS_SURICATA_LOGS_PATH:-./logs/logs_suricata}:/var/log/suricata
     restart: unless-stopped
 
   nginx_proxy:

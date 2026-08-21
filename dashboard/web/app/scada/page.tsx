@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Factory } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -93,8 +94,9 @@ export default function ScadaPage() {
           </span>
         </div>
 
-        <h1 className="text-2xl font-semibold text-gray-200">
-          🏭 Telemetría Industrial (SCADA)
+        <h1 className="text-2xl font-semibold text-gray-200 flex items-center gap-2">
+          <Factory className="w-6 h-6 text-blue-500" />
+          Telemetría Industrial (SCADA)
         </h1>
         <p className="text-sm text-gray-400 mt-1">
           Eventos del protocolo IEC-104 capturados en tiempo real desde el

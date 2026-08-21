@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { TerminalSquare } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -147,8 +148,9 @@ export default function RawPage() {
       {/* Header                                                              */}
       {/* ------------------------------------------------------------------ */}
       <header className="mb-6">
-        <h1 className="text-2xl font-semibold text-gray-200">
-          📝 Logs Raw (Datos Crudos)
+        <h1 className="text-2xl font-semibold text-gray-200 flex items-center gap-2">
+          <TerminalSquare className="w-6 h-6 text-gray-300" />
+          Logs Raw (Datos Crudos)
         </h1>
         <p className="text-sm text-gray-400 mt-1">
           Todos los eventos sin filtrar del índice{" "}

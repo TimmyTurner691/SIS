@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from 'react';
+import { Radar } from 'lucide-react';
 
 export default function DiscoveredAssets() {
     const [assets, setAssets] = useState<any[]>([]);
@@ -45,7 +46,10 @@ export default function DiscoveredAssets() {
     return (
         <div className="bg-[#1a2235] rounded-lg border-t-2 border-t-[#5F13CF] p-6 mt-8 shadow-lg">
             <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl text-white font-bold">🧭 Equipos Descubiertos</h2>
+                <h2 className="text-xl text-white font-bold flex items-center gap-2">
+                    <Radar className="w-5 h-5 text-gray-400" />
+                    Equipos Descubiertos
+                </h2>
                 <button
                     onClick={promoteSelected}
                     disabled={selected.size === 0 || loading}

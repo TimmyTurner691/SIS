@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from 'react';
+import { Network } from 'lucide-react';
 
 export default function RegisteredAssets() {
     const [assets, setAssets] = useState<any[]>([]);
@@ -12,7 +13,10 @@ export default function RegisteredAssets() {
 
     return (
         <div className="bg-[#1a2235] rounded-lg border-t-2 border-t-[#7BDCB5] p-6 shadow-lg">
-            <h2 className="text-xl text-white font-bold mb-4">📋 Activos Registrados (Oficiales)</h2>
+            <h2 className="text-xl text-white font-bold mb-4 flex items-center gap-2">
+                <Network className="w-6 h-6 text-emerald-500" />
+                Activos Registrados (Oficiales)
+            </h2>
             <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm text-gray-300">
                     <thead className="bg-[#111827] text-[#7BDCB5]">
