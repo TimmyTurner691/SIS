@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { Mail } from "lucide-react";
 
 export default function AlertConfig() {
     const [email, setEmail] = useState("");
@@ -51,7 +52,8 @@ export default function AlertConfig() {
     return (
         <div className="bg-[#1a2235] rounded-lg border border-gray-800/50 border-t-2 border-t-[#5F13CF] p-4 shadow-lg w-full">
             <h2 className="text-base font-semibold text-gray-200 flex items-center gap-2">
-                <span className="shrink-0 text-lg">📧</span>
+                {/* Aquí está el cambio: Reemplazamos el emoji por el ícono de Lucide */}
+                <Mail className="w-5 h-5 text-[#5F13CF] shrink-0" />
                 <span>Notificaciones SIS</span>
             </h2>
             <p className="text-xs text-gray-400 mt-1 mb-4 leading-relaxed">
