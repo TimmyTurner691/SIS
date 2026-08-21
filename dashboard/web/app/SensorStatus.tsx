@@ -1,75 +1,76 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
+import { Activity, Shield } from "lucide-react";
 
-interface SensorData {
+interface SensorHealth {
   status: string;
   info: string;
 }
 
-interface SensorsResponse {
-  zeek: SensorData;
-  snort: SensorData;
+interface SensorsData {
+  zeek: SensorHealth;
+  snort: SensorHealth;
 }
 
 export default function SensorStatus() {
-  const [sensors, setSensors] = useState<SensorsResponse | null>(null);
+  const [data, setData] = useState<SensorsData | null>(null);
 
-  const fetchSensors = async () => {
+  const fetchStatus = async () => {
     try {
       const res = await fetch("/api/sensors");
       if (res.ok) {
-        const data = await res.json();
-        setSensors(data);
+        const json = await res.json();
+        setData(json);
       }
     } catch (error) {
-      console.error("Error fetching sensor status", error);
+      console.error("Error fetching sensor status:", error);
     }
   };
 
   useEffect(() => {
-    fetchSensors();
-    const interval = setInterval(fetchSensors, 15000);
-    
-    // Limpieza del intervalo
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 5000);
     return () => clearInterval(interval);
   }, []);
 
-  if (!sensors) {
+  if (!data) {
     return (
-      <div className="px-4 py-5 border-b border-gray-800/50 bg-[#1a2235]">
-        <p className="text-xs text-gray-500 text-center animate-pulse">Cargando telemetría...</p>
+      <div className="flex items-center gap-2 text-xs text-gray-500 animate-pulse">
+        <Activity className="w-4 h-4" /> Cargando sensores...
       </div>
     );
   }
 
-  return (
-    <div className="px-4 py-5 border-b border-gray-800/50 bg-[#1a2235] space-y-4 shrink-0">
-      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-        📡 Telemetría Sensores
-      </h3>
-      
-      <div className="space-y-3">
-        {/* Sensor Zeek */}
-        <div className="bg-[#111827] rounded-md p-3 border border-gray-800/50 shadow-inner">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-sm font-medium text-gray-200">Zeek</span>
-            <span className="text-xs">{sensors.zeek.status}</span>
-          </div>
-          <p className="text-xs text-gray-500 truncate" title={sensors.zeek.info}>
-            {sensors.zeek.info}
-          </p>
-        </div>
+  // Función para asignar colores según el estado (verde, rojo o gris)
+  const getStatusStyle = (status: string) => {
+    if (status.includes("🔴")) return "text-red-400 bg-red-900/10 border-red-900/50";
+    if (status.includes("⚪")) return "text-gray-400 bg-gray-800/30 border-gray-700/50";
+    return "text-emerald-400 bg-emerald-900/10 border-emerald-900/30";
+  };
 
-        {/* Sensor Snort */}
-        <div className="bg-[#111827] rounded-md p-3 border border-gray-800/50 shadow-inner">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-sm font-medium text-gray-200">Snort</span>
-            <span className="text-xs">{sensors.snort.status}</span>
-          </div>
-          <p className="text-xs text-gray-500 truncate" title={sensors.snort.info}>
-            {sensors.snort.info}
-          </p>
+  return (
+    <div className="flex items-center gap-4">
+      {/* Etiqueta de sección */}
+      <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider hidden lg:block mr-2">
+        Telemetría
+      </span>
+
+      {/* Sensor Zeek */}
+      <div className={`flex items-center gap-2 px-3 py-1.5 rounded-md border shadow-sm ${getStatusStyle(data.zeek.status)}`}>
+        <Activity className="w-4 h-4 shrink-0" />
+        <div className="flex flex-col">
+          <span className="text-[10px] font-bold uppercase tracking-wider leading-none">Zeek</span>
+          <span className="text-[10px] opacity-80 leading-none mt-1">{data.zeek.info}</span>
+        </div>
+      </div>
+
+      {/* Sensor Snort */}
+      <div className={`flex items-center gap-2 px-3 py-1.5 rounded-md border shadow-sm ${getStatusStyle(data.snort.status)}`}>
+        <Shield className="w-4 h-4 shrink-0" />
+        <div className="flex flex-col">
+          <span className="text-[10px] font-bold uppercase tracking-wider leading-none">Snort</span>
+          <span className="text-[10px] opacity-80 leading-none mt-1">{data.snort.info}</span>
         </div>
       </div>
     </div>

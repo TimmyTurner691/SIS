@@ -33,26 +33,24 @@ export default function RootLayout({
     <html lang="es" className={`${geistSans.variable} ${geistMono.variable} dark antialiased h-full`}>
       <body className="min-h-full flex bg-[#111827] text-gray-200">
 
-        {/* SIDEBAR LATERAL (Restaurada la etiqueta aside y el logo) */}
+        {/* SIDEBAR LATERAL */}
         <aside className="w-64 flex-shrink-0 bg-[#1a2235] border-r border-gray-800/50 flex flex-col fixed h-full z-20">
-          <div className="h-30 flex items-center justify-center p-0 overflow-hidden border-b border-gray-800/50 shrink-0">
+
+          {/* CONTENEDOR DEL LOGO CORREGIDO */}
+          <div className="h-36 flex items-center justify-center p-4 border-b border-gray-800/50 shrink-0">
             <Image
-              src="/1.png"
-              alt="SIS Logo horizontal"
-              width={260}
-              height={160}
-              className="object-contain h-full w-auto scale-125 hover:scale-110 transition-transform duration-300"
+              src="/logo-sis-vertical.png"
+              alt="SIS Logo Vertical"
+              width={220}
+              height={120}
+              className="object-contain w-full h-full hover:scale-105 transition-transform duration-300"
               priority
             />
           </div>
 
-          <SensorStatus />
-
           {/* Navegación y Configuración */}
-          <nav className="flex-1 px-4 py-4 overflow-y-auto flex flex-col">
-            {/* Redujimos el space-y-2 a space-y-1 para agrupar más los links */}
+          <nav className="flex-1 px-4 pt-8 pb-4 overflow-y-auto flex flex-col">
             <div className="space-y-1">
-              {/* Redujimos el padding vertical de py-2 a py-1.5 */}
               <Link href="/" className="block px-3 py-1.5 text-sm font-medium rounded-md bg-[#5F13CF]/10 text-[#5F13CF] border border-[#5F13CF]/20 transition-colors">
                 Dashboard
               </Link>
@@ -70,7 +68,7 @@ export default function RootLayout({
               </Link>
             </div>
 
-            {/* Redujimos el margen superior de mt-8 a mt-5 */}
+            {/* Configuración de correo */}
             <div className="mt-5 pt-4 border-t border-gray-800/50">
               <AlertConfig />
             </div>
@@ -83,11 +81,12 @@ export default function RootLayout({
           </div>
         </aside>
 
-        {/* CONTENEDOR PRINCIPAL (Todo lo que está a la derecha del sidebar) */}
+        {/* CONTENEDOR PRINCIPAL */}
         <div className="flex-1 ml-64 flex flex-col min-h-screen">
 
           {/* BARRA SUPERIOR (Navbar) */}
-          <header className="h-16 bg-[#1a2235]/90 backdrop-blur border-b border-gray-800/50 flex items-center justify-end px-8 sticky top-0 z-10 shadow-sm">
+          <header className="h-16 bg-[#1a2235]/90 backdrop-blur border-b border-gray-800/50 flex items-center justify-between px-6 sticky top-0 z-10 shadow-sm">
+            <SensorStatus />
             <CommandCenter />
           </header>
 

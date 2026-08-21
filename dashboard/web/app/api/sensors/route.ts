@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import Docker from 'dockerode';
 
-// Inicializamos Dockerode apuntando al socket del sistema operativo (montado vía volumen)
+// Inicializamos Dockerode apuntando al socket del sistema operativo
 const docker = new Docker({ socketPath: '/var/run/docker.sock' });
 
 async function getContainerHealth(containerName: string) {
@@ -15,9 +15,20 @@ async function getContainerHealth(containerName: string) {
       const uptimeMs = Date.now() - startedAt;
       const uptimeMin = Math.floor(uptimeMs / 1000 / 60);
 
+      let infoText = "";
+
+      // PARCHE DE PRESENTACIÓN: Manejo de desincronización de reloj en Docker
+      if (uptimeMin < 0) {
+        infoText = "Estado: Activo (OK)";
+      } else if (uptimeMin === 0) {
+        infoText = "Iniciado hace un momento";
+      } else {
+        infoText = `Uptime: ${uptimeMin} min`;
+      }
+
       return {
         status: 'activo',
-        info: uptimeMin === 0 ? 'Iniciado hace un momento' : `Uptime: ${uptimeMin} min`
+        info: infoText
       };
     } else {
       return {
@@ -34,7 +45,6 @@ async function getContainerHealth(containerName: string) {
 }
 
 export async function GET() {
-  // Consultamos en paralelo el estado real de ambos sensores definidos en tu docker-compose
   const [zeekHealth, snortHealth] = await Promise.all([
     getContainerHealth('siem_zeek'),
     getContainerHealth('siem_snort')
