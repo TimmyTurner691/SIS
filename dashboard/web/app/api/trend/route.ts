@@ -65,7 +65,7 @@ export async function GET(request: NextRequest) {
                       { term: { "risk_label.keyword": "CRITICO" } },
                       { term: { "risk_label.keyword": "Crítico" } },
                       { term: { "risk_label.keyword": "Critico" } },
-                      { range: { risk_total_score: { gte: 15 } } },
+                      { range: { risk_total_score: { gte: 20 } } },
                     ],
                     minimum_should_match: 1,
                   },
@@ -80,7 +80,7 @@ export async function GET(request: NextRequest) {
                       {
                         bool: {
                           must: [
-                            { range: { risk_total_score: { gte: 8, lt: 15 } } },
+                            { range: { risk_total_score: { gte: 8, lt: 20 } } },
                           ],
                         },
                       },

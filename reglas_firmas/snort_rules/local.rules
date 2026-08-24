@@ -1,9 +1,12 @@
 # --- REGLAS LIMPIAS (CONFIG) ---
-# SID 1000001: IEC-104
-alert tcp any any -> any 2404 (msg:"SIS: IEC-104 Malicious"; content:"|68|"; depth:1; sid:1000001; rev:1;)
-# SID 1000002: Exploit
-alert tcp any any -> any any (msg:"SIS: Exploit Detected"; content:"exploit"; nocase; sid:1000002; rev:1;)
-# SID 1000003: DoS (SIMPLIFICADA)
-alert tcp any any -> any 2404 (msg:"SIS: SCADA DoS Check"; flags:S; sid:1000003; rev:1;)
-# Regla de prueba de conectividad
-alert icmp any any -> any any (msg:"[TEST] Ping Detectado en WiFi"; sid:1000005; rev:1;)
+# SID 1000001: IEC-104 (Fuerza severidad Crítica)
+alert tcp any any -> any 2404 (msg:"SIS: IEC-104 Malicious [CRITICO]"; content:"|68|"; depth:1; priority:1; sid:1000001; rev:2;)
+
+# SID 1000002: Exploit (Fuerza severidad Alta)
+alert tcp any any -> any any (msg:"SIS: Exploit Detected [ALTO]"; content:"exploit"; nocase; priority:2; sid:1000002; rev:2;)
+
+# SID 1000003: DoS (Fuerza severidad Alta)
+alert tcp any any -> any 2404 (msg:"SIS: SCADA DoS Check [ALTO]"; flags:S; priority:2; sid:1000003; rev:2;)
+
+# Regla de prueba de conectividad (Informativa)
+alert icmp any any -> any any (msg:"[TEST] Ping Detectado en WiFi"; priority:4; sid:1000005; rev:2;)

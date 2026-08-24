@@ -731,7 +731,7 @@ with tab_risk:
         k1, k2, k3, k4 = st.columns(4)
         
         max_score = df['risk_total_score'].max()
-        criticos = len(df[df['risk_total_score'] >= 17])
+        criticos = len(df[df['risk_total_score'] >= 20])
         
         peor_score_ia = df['ai_score'].min() if 'ai_score' in df.columns else 0
         nivel_anomalia_kpi = lógica_calcular_anomalia_pct(peor_score_ia)
@@ -756,8 +756,8 @@ with tab_risk:
                 st.success("✅ Sistema estable. No hay incidentes de riesgo Medio/Alto.")
             
             for index, row in df_risk.iterrows():
-                css_class = "risk-card-critical" if row['risk_total_score'] >= 17 else "risk-card-medium"
-                icon = "🚨" if row['risk_total_score'] >= 17 else "⚠️"
+                css_class = "risk-card-critical" if row['risk_total_score'] >= 20 else "risk-card-medium"
+                icon = "🚨" if row['risk_total_score'] >= 20 else "⚠️"
                 anomalia_pct_row = lógica_calcular_anomalia_pct(row['ai_score'])
                 impacto = row.get('risk_impact', 0)
                 tactica = row.get('mitre_tactics', 'N/A')

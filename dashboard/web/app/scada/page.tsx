@@ -213,9 +213,9 @@ export default function ScadaPage() {
               eventos IEC-104
             </span>
             <span className="text-xs text-gray-600">
-              Score crítico ({">"} 17):{" "}
+              Score crítico ({">="} 20):{" "}
               <span className="text-red-400 font-bold">
-                {events.filter((e) => (e.risk_total_score ?? 0) > 17).length}
+                {events.filter((e) => (e.risk_total_score ?? 0) >= 20).length}
               </span>
             </span>
           </div>

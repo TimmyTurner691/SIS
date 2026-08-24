@@ -16,7 +16,7 @@ export async function GET() {
           bool: {
             should: [
               { term:  { 'risk_label.keyword': 'CRÍTICO' } },
-              { range: { risk_total_score: { gte: 15 } } },
+              { range: { risk_total_score: { gte: 20 } } },
             ],
             minimum_should_match: 1,
           },

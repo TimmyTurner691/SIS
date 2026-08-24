@@ -24,12 +24,15 @@ except ImportError:
     def send_email_alert(subject, body, level="INFO", receiver_email=None):
         destino = receiver_email if receiver_email else "DEFAULT"
         print(f"📧 [EMAIL SIMULADO] {subject} -> Para: {destino}", flush=True)
+        return True
+
+from utils_env import get_env_int, get_env_bool, get_env_float
 
 # ================= CONFIGURACIÓN NITRO =================
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_PORT = get_env_int("REDIS_PORT", 6379)
 ELASTIC_HOST = os.getenv("ELASTIC_HOST", "elasticsearch")
-ELASTIC_PORT = int(os.getenv("ELASTIC_PORT", "9200"))
+ELASTIC_PORT = get_env_int("ELASTIC_PORT", 9200)
 REDIS_KEY = os.getenv("REDIS_KEY", "sis_queue")
 INDEX_NAME = os.getenv("SIS_INDEX_NAME", "sis-logs-v1")
 DISCOVERED_ASSETS_INDEX = os.getenv("SIS_DISCOVERED_ASSETS_INDEX", "sis-discovered-assets-v3")
@@ -41,9 +44,9 @@ BATCH_SIZE = 5000
 FLUSH_INTERVAL = 0.5    
 
 FLOOD_THRESHOLD = 100 
-DIRECT_LOG_POLL_ENABLED = os.getenv("SIS_DIRECT_LOG_POLL_ENABLED", "true").lower() == "true"
-DIRECT_LOG_POLL_INTERVAL = float(os.getenv("SIS_DIRECT_LOG_POLL_INTERVAL", "1.0"))
-DIRECT_LOG_MAX_LINES = int(os.getenv("SIS_DIRECT_LOG_MAX_LINES", "1000"))
+DIRECT_LOG_POLL_ENABLED = get_env_bool("SIS_DIRECT_LOG_POLL_ENABLED", True)
+DIRECT_LOG_POLL_INTERVAL = get_env_float("SIS_DIRECT_LOG_POLL_INTERVAL", 1.0)
+DIRECT_LOG_MAX_LINES = get_env_int("SIS_DIRECT_LOG_MAX_LINES", 1000)
 
 # ================= LÓGICA DE TRADUCCIÓN =================
 # ... (Sin cambios en traducir_iec104) ...
@@ -151,8 +154,33 @@ class RiskFusionEngine:
         total_score = probabilidad * impacto
         
         label = "BAJO"
-        if total_score >= 15: label = "CRÍTICO"
+        if total_score >= 20: label = "CRÍTICO"
+        elif total_score >= 15: label = "ALTO"
         elif total_score >= 8: label = "MEDIO"
+
+        # ===========================================================
+        # NUEVO: OVERRIDE DE PRIORIDAD (HARDCODING DEFENSIVO)
+        # ===========================================================
+        if doc.get('source') == 'snort':
+            mensaje_alerta = doc.get('message', '').upper()
+            
+            # Si Snort dice que es Crítico o Prioridad 1, forzamos el pánico
+            if "[CRITICO]" in mensaje_alerta or "PRIORITY: 1" in mensaje_alerta:
+                total_score = 25
+                label = "CRÍTICO"
+                impacto = 5
+                probabilidad = 5
+                doc["ai_score_override"] = True  # Marca de auditoría
+                
+            # Si Snort dice que es Alto o Prioridad 2, lo subimos a nivel rojo/naranja
+            elif "[ALTO]" in mensaje_alerta or "PRIORITY: 2" in mensaje_alerta:
+                if total_score < 15: # Solo reescribimos si la IA le dio un score bajo
+                    total_score = 15
+                    label = "ALTO"
+                    impacto = 3
+                    probabilidad = 5
+                    doc["ai_score_override"] = True
+        # ===========================================================
 
         doc.update(mitre_data)
         doc.update({
@@ -245,7 +273,16 @@ def normalizar_evento(raw_json):
                 doc['comando_humano'] = traducir_iec104(doc['sub_source'], str(message_raw))
             elif "conn.log" in file_path: doc['protocol'] = zeek_data.get('proto', 'tcp')
         return doc
-    except: return None
+    except Exception as e:
+        print(f"⚠️ [PARSE ERROR] Fallo al parsear evento: {e}", flush=True)
+        return {
+            "@timestamp": datetime.now().isoformat(),
+            "raw_log": str(raw_json)[:500],
+            "src_ip": "0.0.0.0", "dst_ip": "0.0.0.0", "dst_port": 0,
+            "protocol": "parse_error", "source": "unknown", "comando_humano": f"❌ Error de Parseo: {e}",
+            "message": str(raw_json),
+            "risk_total_score": 0, "risk_label": "BAJO"
+        }
 
 
 def _source_type_for_direct_log(path):
@@ -536,7 +573,7 @@ def main():
                 metrics_start_time = time.time()
                 metrics_count = 0
 
-            IS_FLOOD = True if current_eps > FLOOD_THRESHOLD else False
+            IS_FLOOD_GLOBAL = True if current_eps > FLOOD_THRESHOLD else False
 
             stats['total'] += batch_len
             if len(history) >= 20 and not is_trained:
@@ -544,8 +581,7 @@ def main():
                  except: pass
 
             ai_score = 0.5
-            if IS_FLOOD: ai_score = -1.0
-            elif is_trained:
+            if is_trained:
                 try: ai_score = float(model.decision_function([[stats['snort'], stats['total']]])[0])
                 except: pass
 
@@ -557,9 +593,9 @@ def main():
                 if ai_score < -0.35: 
                     icon = "⚠️"
                     status_msg = "ANOMALÍA SUTIL"
-                if IS_FLOOD: 
+                if IS_FLOOD_GLOBAL: 
                     icon = "🔥"
-                    status_msg = "FLOOD / DOS"
+                    status_msg = "TRAFICO ALTO (Monitor)"
                 
                 if current_eps > 0 or ai_score < 0:
                     print(f"{icon} [IA MONITOR] Score: {ai_score:.3f} | EPS: {current_eps:.0f} | Estado: {status_msg}", flush=True)
@@ -567,20 +603,28 @@ def main():
                 last_print_time = time.time()
 
             actions_bulk = []
+            ip_counts = {}
+            parsed_docs = []
             for raw_json in batch_raw:
                 doc = normalizar_evento(raw_json)
                 if not doc: continue
+                parsed_docs.append((raw_json, doc))
+                src_ip = doc.get("src_ip", "0.0.0.0")
+                ip_counts[src_ip] = ip_counts.get(src_ip, 0) + 1
+
+            for raw_json, doc in parsed_docs:
+                src_ip = doc.get("src_ip", "0.0.0.0")
+                is_flood_ip = ip_counts.get(src_ip, 0) > FLOOD_THRESHOLD
                 
-                final_doc = engine.evaluar_riesgo(doc, ai_score, IS_FLOOD)
-                discovered_assets.process_event(raw_json, final_doc)
+                final_doc = engine.evaluar_riesgo(doc, ai_score, is_flood_ip)
                 discovered_assets.process_event(raw_json, final_doc)
                 
-                if final_doc.get('risk_label') == 'CRÍTICO' and not IS_FLOOD:
+                if final_doc.get('risk_label') == 'CRÍTICO' and not is_flood_ip:
                     ip_atacante = final_doc.get('src_ip', 'unknown')
                     now = time.time()
                     if (now - alert_cooldown.get(ip_atacante, 0)) > 60:
                         asunto = f"🚨 {final_doc.get('mitre_msg')}"
-                        cuerpo = f"CRÍTICO Detectado\nEPS: {current_eps:.1f}\nIP: {ip_atacante}"
+                        cuerpo = f"CRÍTICO Detectado\nIP: {ip_atacante}"
                         
                         # --- NUEVA LÓGICA DE CORREO DINÁMICO ---
                         try:
@@ -600,7 +644,7 @@ def main():
 
             if actions_bulk: helpers.bulk(es, actions_bulk)
             
-            if not IS_FLOOD or (time.time() % 5 == 0):
+            if (time.time() % 5 == 0):
                 history.append([stats['snort'], stats['total']])
             stats = {'total': 0, 'snort': 0}
 
