@@ -141,6 +141,26 @@ class SignatureCatalogTests(unittest.TestCase):
         self.assertIn('msg:"SIS SMB eternalblue ms17-010 keyword"', smb_text)
         self.assertIn('content:"|5C|samr"', smb_text)
 
+    def test_web_package_uses_reserved_starter_and_expansion_blocks(self):
+        web_path = REPOSITORY_ROOT / "reglas_firmas/snort_rules/packages/web.rules"
+        web_text = web_path.read_text(encoding="utf-8")
+        sids = validate_rules(web_text)
+
+        self.assertEqual(194, len(sids))
+        self.assertEqual([1100501, 1100502], sids[:2])
+        self.assertEqual(list(range(1112001, 1112193)), sids[2:])
+        self.assertNotIn("sid:1205", web_text)
+        self.assertIn('msg:"SIS WEB sql injection double quoted or equals"', web_text)
+        self.assertIn('msg:"SIS WEB command injection pipe id"', web_text)
+        self.assertIn('msg:"SIS WEB log4shell jndi ldap"', web_text)
+        self.assertIn('msg:"SIS WEB webshell php eval post"', web_text)
+        self.assertIn('msg:"SIS WEB ssrf aws metadata ip"', web_text)
+        self.assertIn('msg:"SIS WEB possible Slowloris keep-alive abuse"', web_text)
+        self.assertIn('content:"|22| or |22|1|22|=|22|1"', web_text)
+        self.assertIn('content:"|7C|id"', web_text)
+        self.assertIn('content:"|3B|select"', web_text)
+        self.assertIn('content:"() { :|3B|}|3B|"', web_text)
+
     def test_each_package_stays_inside_its_reserved_sid_ranges(self):
         expected_ranges = {
             "iec104": [(1100001, 1100099), (1110001, 1110199)],
@@ -148,7 +168,7 @@ class SignatureCatalogTests(unittest.TestCase):
             "iec61850": [(1100201, 1100299)],
             "windows": [(1100301, 1100399)],
             "linux": [(1100401, 1100499)],
-            "web": [(1100501, 1100599)],
+            "web": [(1100501, 1100599), (1112001, 1112199)],
             "dns": [(1100601, 1100699)],
             "smb": [(1100701, 1100799)],
             "otros": [(1100801, 1100899)],
