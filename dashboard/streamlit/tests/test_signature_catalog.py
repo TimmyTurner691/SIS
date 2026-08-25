@@ -96,6 +96,21 @@ class SignatureCatalogTests(unittest.TestCase):
         self.assertIn('content:"|7C| sh"', linux_text)
         self.assertNotIn('content:"\\| sh"', linux_text)
 
+    def test_otros_package_uses_its_reserved_sid_block(self):
+        otros_path = REPOSITORY_ROOT / "reglas_firmas/snort_rules/packages/otros.rules"
+        otros_text = otros_path.read_text(encoding="utf-8")
+        sids = validate_rules(otros_text)
+
+        self.assertEqual(70, len(sids))
+        self.assertEqual(list(range(1100801, 1100871)), sids)
+        self.assertNotIn("sid:1208", otros_text)
+        self.assertIn('msg:"SIS OTROS ICMP echo high rate possible ping flood"', otros_text)
+        self.assertIn('msg:"SIS OTROS Cobalt Strike marker"', otros_text)
+        self.assertIn('msg:"SIS OTROS Docker API create container"', otros_text)
+        self.assertIn('msg:"SIS OTROS SSDP M-SEARCH amplification"', otros_text)
+        self.assertIn('msg:"SIS OTROS DHCP discover flood marker"', otros_text)
+        self.assertIn('content:"X5O!P%@AP[4|5C|PZX54(P^)7CC)7}$EICAR"', otros_text)
+
     def test_each_package_stays_inside_its_reserved_sid_ranges(self):
         expected_ranges = {
             "iec104": [(1100001, 1100099), (1110001, 1110199)],

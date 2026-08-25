@@ -9,6 +9,6 @@
     {"id": "web", "name": "Web", "description": "Ataques HTTP y aplicaciones web.", "rule_file": "web.rules", "default_installed": true},
     {"id": "dns", "name": "DNS", "description": "Consultas anómalas, reconocimiento, abuso, amplificación y túneles DNS.", "rule_file": "dns.rules", "default_installed": true},
     {"id": "smb", "name": "SMB", "description": "Enumeración y abuso de SMB/CIFS.", "rule_file": "smb.rules", "default_installed": true},
-    {"id": "otros", "name": "Otros", "description": "Firmas generales y pruebas de conectividad.", "rule_file": "otros.rules", "default_installed": true}
+    {"id": "otros", "name": "Otros", "description": "Floods, escaneos, amplificación, servicios expuestos, C2 y abuso de protocolos heredados.", "rule_file": "otros.rules", "default_installed": true}
   ]
 }
