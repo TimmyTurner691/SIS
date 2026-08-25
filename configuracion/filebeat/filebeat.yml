@@ -23,7 +23,7 @@ filebeat.inputs:
   paths:
     - /logs/zeek/*.log
   # Importante: Excluimos los de arriba para no enviarlos dos veces
-  exclude_files: ['iec104'] 
+  exclude_files: ['.*iec104.*', '.*telemetry\.log$', '.*stats\.log$', '.*loaded_scripts\.log$', '.*broker\.log$', '.*packet_filter\.log$', '.*capture_loss\.log$']
   fields:
     source_type: "zeek"
   fields_under_root: true
