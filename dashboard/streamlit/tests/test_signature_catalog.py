@@ -62,6 +62,22 @@ class SignatureCatalogTests(unittest.TestCase):
         self.assertIn('msg:"SIS IEC61850 IEC61850 logical node XCBR"', iec_text)
         self.assertIn('msg:"SIS IEC61850 unusually large MMS payload over 4096 bytes"', iec_text)
 
+    def test_linux_package_uses_its_reserved_sid_block(self):
+        linux_path = REPOSITORY_ROOT / "reglas_firmas/snort_rules/packages/linux.rules"
+        linux_text = linux_path.read_text(encoding="utf-8")
+        sids = validate_rules(linux_text)
+
+        self.assertEqual(86, len(sids))
+        self.assertEqual(list(range(1100401, 1100487)), sids)
+        self.assertNotIn("sid:1204", linux_text)
+        self.assertIn('msg:"SIS LINUX interactive bash reverse shell"', linux_text)
+        self.assertIn('msg:"SIS LINUX systemd service write"', linux_text)
+        self.assertIn('msg:"SIS LINUX docker privileged run"', linux_text)
+        self.assertIn('msg:"SIS LINUX cloud metadata linux curl"', linux_text)
+        self.assertIn('msg:"SIS LINUX wget pipe sh"', linux_text)
+        self.assertIn('content:"|7C| sh"', linux_text)
+        self.assertNotIn('content:"\\| sh"', linux_text)
+
     def test_each_package_stays_inside_its_reserved_sid_ranges(self):
         expected_ranges = {
             "iec104": [(1100001, 1100099), (1110001, 1110199)],
