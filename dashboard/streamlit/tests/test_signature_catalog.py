@@ -49,6 +49,19 @@ class SignatureCatalogTests(unittest.TestCase):
         self.assertIn('msg:"SIS IEC104 typeid 105 C_RP_NA_1 reset process command"', iec_text)
         self.assertIn('msg:"SIS IEC104 reserved or unusual typeid 80"', iec_text)
 
+    def test_iec61850_package_uses_its_reserved_sid_block(self):
+        iec_path = REPOSITORY_ROOT / "reglas_firmas/snort_rules/packages/iec61850.rules"
+        iec_text = iec_path.read_text(encoding="utf-8")
+        sids = validate_rules(iec_text)
+
+        self.assertEqual(42, len(sids))
+        self.assertEqual(list(range(1100201, 1100243)), sids)
+        self.assertNotIn("sid:1202", iec_text)
+        self.assertIn('msg:"SIS IEC61850 ACSE association request AARQ"', iec_text)
+        self.assertIn('msg:"SIS IEC61850 MMS write string"', iec_text)
+        self.assertIn('msg:"SIS IEC61850 IEC61850 logical node XCBR"', iec_text)
+        self.assertIn('msg:"SIS IEC61850 unusually large MMS payload over 4096 bytes"', iec_text)
+
     def test_each_package_stays_inside_its_reserved_sid_ranges(self):
         expected_ranges = {
             "iec104": [(1100001, 1100099), (1110001, 1110199)],
