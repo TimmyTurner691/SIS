@@ -156,7 +156,10 @@ services:
       - NODE_ENV=development
       - WATCHPACK_POLLING=true
       - TZ=America/Santiago
-      # URL interna que Next.js usa en SSR/API routes para llamar a Cerebro
+      # URL pública (browser-side): Next.js la inyecta en el bundle del cliente.
+      # Apunta al proxy Nginx usando la IP de la interfaz de gestión del host.
+      - NEXT_PUBLIC_API_BASE_URL=http://${SIS_PUBLIC_IP:-localhost}:${SIS_PROXY_PORT:-8080}/api/cerebro
+      # URL interna (server-side): Next.js la usa en SSR/API routes dentro del contenedor.
       - CEREBRO_INTERNAL_URL=http://cerebro:8000
       # Host de Elasticsearch por red interna (para API routes de Next.js)
       - SIS_DASHBOARD_ELASTIC_HOST=elasticsearch
