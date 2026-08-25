@@ -96,6 +96,21 @@ class SignatureCatalogTests(unittest.TestCase):
         self.assertIn('content:"|7C| sh"', linux_text)
         self.assertNotIn('content:"\\| sh"', linux_text)
 
+    def test_windows_package_uses_its_reserved_sid_block(self):
+        windows_path = REPOSITORY_ROOT / "reglas_firmas/snort_rules/packages/windows.rules"
+        windows_text = windows_path.read_text(encoding="utf-8")
+        sids = validate_rules(windows_text)
+
+        self.assertEqual(85, len(sids))
+        self.assertEqual(list(range(1100301, 1100386)), sids)
+        self.assertNotIn("sid:1203", windows_text)
+        self.assertIn('msg:"SIS WINDOWS possible RDP brute force scan"', windows_text)
+        self.assertIn('msg:"SIS WINDOWS powershell encoded command"', windows_text)
+        self.assertIn('msg:"SIS WINDOWS mimikatz sekurlsa logonpasswords"', windows_text)
+        self.assertIn('msg:"SIS WINDOWS vssadmin delete shadows"', windows_text)
+        self.assertIn('content:"net group |22|Domain Admins|22|"', windows_text)
+        self.assertIn('content:"|5C|msagent_"', windows_text)
+
     def test_otros_package_uses_its_reserved_sid_block(self):
         otros_path = REPOSITORY_ROOT / "reglas_firmas/snort_rules/packages/otros.rules"
         otros_text = otros_path.read_text(encoding="utf-8")

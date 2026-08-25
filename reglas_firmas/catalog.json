@@ -4,7 +4,7 @@
     {"id": "iec104", "name": "IEC-104", "description": "APCI/U-frames, ASDUs, comandos, COT, tipos reservados y patrones de inundación IEC 60870-5-104.", "rule_file": "iec104.rules", "default_installed": true},
     {"id": "modbus", "name": "Modbus", "description": "Modbus/TCP: funciones, escrituras, diagnósticos, excepciones, Unit IDs y sondeos anómalos.", "rule_file": "modbus.rules", "default_installed": true},
     {"id": "iec61850", "name": "IEC-61850", "description": "MMS sobre TCP/102, TPKT/COTP/ACSE, operaciones, nodos lógicos y anomalías de payload IEC-61850.", "rule_file": "iec61850.rules", "default_installed": true},
-    {"id": "windows", "name": "Windows", "description": "Servicios y patrones de amenaza Windows.", "rule_file": "windows.rules", "default_installed": true},
+    {"id": "windows", "name": "Windows", "description": "RDP/WinRM/MSRPC, PowerShell, LOLBins, AD, credenciales, ransomware y C2 Windows.", "rule_file": "windows.rules", "default_installed": true},
     {"id": "linux", "name": "Linux", "description": "Exposición de servicios, shells, descargas, persistencia, escalamiento, evasión, túneles y artefactos cloud/container Linux.", "rule_file": "linux.rules", "default_installed": true},
     {"id": "web", "name": "Web", "description": "Ataques HTTP y aplicaciones web.", "rule_file": "web.rules", "default_installed": true},
     {"id": "dns", "name": "DNS", "description": "Consultas anómalas, reconocimiento, abuso, amplificación y túneles DNS.", "rule_file": "dns.rules", "default_installed": true},
