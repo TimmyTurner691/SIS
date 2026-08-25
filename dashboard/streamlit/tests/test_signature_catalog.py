@@ -126,6 +126,21 @@ class SignatureCatalogTests(unittest.TestCase):
         self.assertIn('msg:"SIS OTROS DHCP discover flood marker"', otros_text)
         self.assertIn('content:"X5O!P%@AP[4|5C|PZX54(P^)7CC)7}$EICAR"', otros_text)
 
+    def test_smb_package_uses_its_reserved_sid_block(self):
+        smb_path = REPOSITORY_ROOT / "reglas_firmas/snort_rules/packages/smb.rules"
+        smb_text = smb_path.read_text(encoding="utf-8")
+        sids = validate_rules(smb_text)
+
+        self.assertEqual(56, len(sids))
+        self.assertEqual(list(range(1100701, 1100757)), sids)
+        self.assertNotIn("sid:1207", smb_text)
+        self.assertIn('msg:"SIS SMB possible brute force/session storm"', smb_text)
+        self.assertIn('msg:"SIS SMB psexec service marker"', smb_text)
+        self.assertIn('msg:"SIS SMB samr named pipe access"', smb_text)
+        self.assertIn('msg:"SIS SMB ntds dit access string"', smb_text)
+        self.assertIn('msg:"SIS SMB eternalblue ms17-010 keyword"', smb_text)
+        self.assertIn('content:"|5C|samr"', smb_text)
+
     def test_each_package_stays_inside_its_reserved_sid_ranges(self):
         expected_ranges = {
             "iec104": [(1100001, 1100099), (1110001, 1110199)],
