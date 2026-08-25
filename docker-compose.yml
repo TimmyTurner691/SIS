@@ -147,31 +147,20 @@ services:
     networks:
       - siem_internal_net
     restart: unless-stopped
-
-  dashboard:
+dashboard:
     build: ./dashboard/web
     container_name: siem_dashboard_web
     working_dir: /app
     environment:
-      - NODE_ENV=development
-      - WATCHPACK_POLLING=true
+      - NODE_ENV=production  # Cambiado a producción
       - TZ=America/Santiago
-      # URL pública (browser-side): Next.js la inyecta en el bundle del cliente.
-      # Apunta al proxy Nginx usando la IP de la interfaz de gestión del host.
       - NEXT_PUBLIC_API_BASE_URL=http://${SIS_PUBLIC_IP:-localhost}:${SIS_PROXY_PORT:-8080}/api/cerebro
-      # URL interna (server-side): Next.js la usa en SSR/API routes dentro del contenedor.
       - CEREBRO_INTERNAL_URL=http://cerebro:8000
-      # Host de Elasticsearch por red interna (para API routes de Next.js)
       - SIS_DASHBOARD_ELASTIC_HOST=elasticsearch
       - SIS_DASHBOARD_ELASTIC_PORT=9200
     volumes:
-      - ./dashboard/web:/app
-      - /app/node_modules
+      # 🔥 ELIMINAMOS ./dashboard/web:/app para que Docker use sus propios permisos
       - /var/run/docker.sock:/var/run/docker.sock
-    # Puerto 3000 solo accesible por nginx_proxy en red interna.
-    # Si necesitas acceder directamente durante desarrollo, descomenta:
-    # ports:
-    #   - "${SIS_DASHBOARD_PORT:-3000}:3000"
     depends_on:
       - cerebro
     networks:
