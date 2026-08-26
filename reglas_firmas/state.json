@@ -1,15 +1,45 @@
 {
   "version": 1,
-  "profile": "ot-electrico",
+  "profile": null,
   "packages": {
-    "iec104": {"installed": true, "enabled": true},
-    "modbus": {"installed": true, "enabled": true},
-    "iec61850": {"installed": true, "enabled": true},
-    "windows": {"installed": true, "enabled": false},
-    "linux": {"installed": true, "enabled": false},
-    "web": {"installed": true, "enabled": false},
-    "dns": {"installed": true, "enabled": true},
-    "smb": {"installed": true, "enabled": false},
-    "otros": {"installed": true, "enabled": false}
-  }
+    "iec104": {
+      "installed": true,
+      "enabled": true
+    },
+    "modbus": {
+      "installed": true,
+      "enabled": true
+    },
+    "iec61850": {
+      "installed": true,
+      "enabled": true
+    },
+    "windows": {
+      "installed": true,
+      "enabled": true
+    },
+    "linux": {
+      "installed": true,
+      "enabled": true
+    },
+    "web": {
+      "installed": true,
+      "enabled": true
+    },
+    "dns": {
+      "installed": true,
+      "enabled": true
+    },
+    "smb": {
+      "installed": true,
+      "enabled": true
+    },
+    "otros": {
+      "installed": true,
+      "enabled": true
+    }
+  },
+  "updated_at": "2026-08-25T21:36:32.774358+00:00",
+  "effective_rule_count": 810,
+  "enabled_package_count": 9
 }

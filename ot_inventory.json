@@ -4,5 +4,95 @@
         "name": "REACTOR_NUCLEAR_PRINCIPAL",
         "type": "SCADA_CORE",
         "criticality": "CRITICAL"
+    },
+    {
+        "ip": "192.168.1.84",
+        "name": "Descubierto_192.168.1.84",
+        "criticality": "LOW",
+        "source": "discovered_assets",
+        "mac": "10:59:32:3B:9B:12",
+        "vendor": "Roku",
+        "os_estimate": "Equipo activo por ping sweep"
+    },
+    {
+        "ip": "192.168.1.82",
+        "name": "Descubierto_192.168.1.82",
+        "criticality": "LOW",
+        "source": "discovered_assets",
+        "mac": "E2:0E:E4:D3:AA:CC",
+        "vendor": "OUI no registrado",
+        "os_estimate": "Equipo activo por ping sweep"
+    },
+    {
+        "ip": "192.168.1.1",
+        "name": "_gateway",
+        "criticality": "LOW",
+        "source": "discovered_assets",
+        "mac": "A0:8A:06:B4:49:70",
+        "vendor": "OUI no registrado",
+        "os_estimate": "Equipo activo por ping sweep"
+    },
+    {
+        "ip": "192.168.1.88",
+        "name": "jakeserver",
+        "criticality": "MEDIUM",
+        "source": "discovered_assets",
+        "mac": "N/A",
+        "vendor": "Desconocido",
+        "os_estimate": "Linux/Unix probable"
+    },
+    {
+        "ip": "192.168.1.81",
+        "name": "192.168.1.88:8501",
+        "criticality": "LOW",
+        "source": "discovered_assets",
+        "mac": "04:68:74:47:27:35",
+        "vendor": "Cloud Network Technology Singapore PTE.",
+        "os_estimate": "Equipo activo por ping sweep"
+    },
+    {
+        "ip": "192.168.1.93",
+        "name": "Descubierto_192.168.1.93",
+        "criticality": "LOW",
+        "source": "discovered_assets",
+        "mac": "58:02:05:54:38:3C",
+        "vendor": "OUI no registrado",
+        "os_estimate": "Equipo activo por ARP"
+    },
+    {
+        "ip": "192.168.1.86",
+        "name": "Descubierto_192.168.1.86",
+        "criticality": "LOW",
+        "source": "discovered_assets",
+        "mac": "BE:BD:F2:F7:BF:E3",
+        "vendor": "OUI no registrado",
+        "os_estimate": "Equipo activo por ping sweep"
+    },
+    {
+        "ip": "192.168.1.87",
+        "name": "Descubierto_192.168.1.87",
+        "criticality": "LOW",
+        "source": "discovered_assets",
+        "mac": "68:B6:91:82:34:37",
+        "vendor": "Amazon Technologies",
+        "os_estimate": "Equipo activo por ping sweep"
+    },
+    {
+        "ip": "192.168.1.90",
+        "name": "Descubierto_192.168.1.90",
+        "criticality": "LOW",
+        "source": "discovered_assets",
+        "mac": "D8:DC:40:BF:11:44",
+        "vendor": "Apple",
+        "os_estimate": "Equipo activo por ping sweep"
+    },
+    {
+        "ip": "192.168.1.83",
+        "name": "Descubierto_192.168.1.83",
+        "criticality": "LOW",
+        "source": "discovered_assets",
+        "mac": "0E:02:D9:64:F0:31",
+        "vendor": "OUI no registrado",
+        "os_estimate": "Equipo activo por ping sweep"
     }
 ]
