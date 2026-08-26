@@ -36,7 +36,7 @@ export default function SidebarNav() {
       <NavItem href="/equipos-descubiertos">Equipos Descubiertos</NavItem>
       <NavItem href="/activos-registrados">Activos Registrados</NavItem>
       <NavItem href="/firmas">Firmas / Reglas</NavItem>
-      <NavItem href="/raw">Logs Raw</NavItem>
+      <NavItem href="/raw">Audit Logs</NavItem>
     </div>
   );
 }

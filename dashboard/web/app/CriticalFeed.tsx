@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { formatSantiagoTimestamp } from './lib/time';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -17,18 +18,6 @@ interface CriticalEvent {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function formatTimestamp(ts?: string): string {
-  if (!ts) return '—';
-  try {
-    return new Date(ts).toLocaleString('es-ES', {
-      dateStyle: 'short',
-      timeStyle: 'medium',
-    });
-  } catch {
-    return ts;
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -100,7 +89,7 @@ export default function CriticalFeed() {
               >
                 {/* Timestamp */}
                 <td className="px-4 py-2.5 whitespace-nowrap font-mono text-[10px] text-gray-500">
-                  {formatTimestamp(ev['@timestamp'])}
+                  {formatSantiagoTimestamp(ev['@timestamp'])}
                 </td>
 
                 {/* Amenaza — campo mitre_msg */}

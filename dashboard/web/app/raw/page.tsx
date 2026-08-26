@@ -1,1 +1,1 @@
-import EventExplorer from "../EventExplorer"; export default function Page(){return <EventExplorer kind="raw" title="Logs Raw" description="Exploración técnica de eventos normalizados y visibles."/>}
+import EventExplorer from "../EventExplorer"; export default function Page(){return <EventExplorer kind="raw" title="Audit Logs" description="Trazabilidad técnica de eventos normalizados. Haz doble clic en un registro para ver sus detalles."/>}

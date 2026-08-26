@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Cpu, Trash2, RotateCcw, Zap } from "lucide-react"; // <-- Íconos corporativos
+import { Cpu, RefreshCw, Trash2, RotateCcw, Zap } from "lucide-react"; // <-- Íconos corporativos
 
 export default function CommandCenter() {
   const [loading, setLoading] = useState(false);
@@ -41,6 +41,14 @@ export default function CommandCenter() {
 
       {/* Contenedor Horizontal de Botones */}
       <div className="flex flex-row items-center space-x-3">
+        <button
+          onClick={() => window.location.reload()}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-sky-900/10 text-sky-400 border border-sky-800/50 hover:bg-sky-600 hover:text-white transition-colors shadow-sm"
+          title="Actualizar todos los datos del dashboard"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+          Actualizar
+        </button>
         <button
           onClick={() => sendCommand("reset_demo")}
           disabled={loading}

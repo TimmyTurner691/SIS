@@ -11,6 +11,7 @@ import {
     ResponsiveContainer
 } from "recharts";
 import { Activity } from "lucide-react";
+import { formatSantiagoTime } from "./lib/time";
 
 interface TrendData {
     time: string;
@@ -41,7 +42,7 @@ export default function RiskTrendChart() {
     };
 
     useEffect(() => {
-        fetchTrendData();
+        void Promise.resolve().then(fetchTrendData);
         // Actualizamos el gráfico cada 60 segundos
         const interval = setInterval(fetchTrendData, 60000);
         return () => clearInterval(interval);
@@ -90,8 +91,7 @@ export default function RiskTrendChart() {
                             <XAxis
                                 dataKey="timestamp"
                                 tickFormatter={(tick) => {
-                                    const d = new Date(tick);
-                                    return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+                                    return formatSantiagoTime(tick);
                                 }}
                                 stroke="#6B7280"
                                 fontSize={10}
@@ -111,8 +111,7 @@ export default function RiskTrendChart() {
                             {/* Tooltip personalizado (hover) */}
                             <Tooltip
                                 labelFormatter={(label) => {
-                                    const d = new Date(label);
-                                    return `Hora: ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+                                    return `Hora Santiago: ${formatSantiagoTime(label)}`;
                                 }}
                                 contentStyle={{
                                     backgroundColor: '#111827',
