@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import Image from "next/image";
 import SidebarNav from "./components/SidebarNav";
 import CommandCenter from "./CommandCenter";
@@ -8,16 +7,6 @@ import SystemHealth from "./SystemHealth";
 import ServiceStatus from "./ServiceStatus";
 import AlertConfig from "./AlertConfig";
 import "./globals.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "SIS - Resumen de Seguridad",
@@ -30,7 +19,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="es" className={`${geistSans.variable} ${geistMono.variable} dark antialiased h-full`}>
+    <html lang="es" className="dark antialiased h-full">
       <body className="min-h-full flex bg-[#0f172a] text-gray-200">
 
         {/* SIDEBAR LATERAL */}

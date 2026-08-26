@@ -1,0 +1,1 @@
+import DiscoveredAssets from "../DiscoveredAssets"; export default function Page(){return <div><h1 className="text-3xl font-bold text-white">Equipos Descubiertos</h1><p className="text-gray-400">Descubrimiento, selección y promoción de equipos.</p><DiscoveredAssets/></div>}

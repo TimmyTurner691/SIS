@@ -29,10 +29,13 @@ function NavItem({ href, children }: NavItemProps) {
 export default function SidebarNav() {
   return (
     <div className="space-y-1">
-      <NavItem href="/">Dashboard</NavItem>
-      <NavItem href="/snort">Alertas Snort</NavItem>
-      <NavItem href="/inventario">Inventario OT</NavItem>
-      <NavItem href="/scada">Telemetría SCADA</NavItem>
+      <NavItem href="/">Fusión de riesgos</NavItem>
+      <NavItem href="/ids">IDS</NavItem>
+      <NavItem href="/red">Red</NavItem>
+      <NavItem href="/scada">SCADA</NavItem>
+      <NavItem href="/equipos-descubiertos">Equipos Descubiertos</NavItem>
+      <NavItem href="/activos-registrados">Activos Registrados</NavItem>
+      <NavItem href="/firmas">Firmas / Reglas</NavItem>
       <NavItem href="/raw">Logs Raw</NavItem>
     </div>
   );
