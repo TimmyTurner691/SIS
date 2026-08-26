@@ -23,6 +23,7 @@ export default function EventExplorer({ kind, title, description }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const isIds = kind === "ids";
+  const isNetwork = kind === "red";
 
   useEffect(() => {
     const controller = new AbortController();
@@ -96,16 +97,18 @@ export default function EventExplorer({ kind, title, description }: Props) {
         <h1 className="text-3xl font-bold text-white">{title}</h1>
         <p className="text-gray-400">{description}</p>
       </div>
-      <div className="grid gap-3 rounded-xl border border-slate-700 bg-[#1a2235] p-4 md:grid-cols-3">
+      <div className={`grid gap-3 rounded-xl border border-slate-700 bg-[#1a2235] p-4 ${isNetwork ? "md:grid-cols-2" : "md:grid-cols-3"}`}>
         <input aria-label="Buscar" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar IP, mensaje, firma…" className="rounded bg-[#0f172a] px-3 py-2 text-sm text-white" />
         <select aria-label="Protocolo" value={protocol} onChange={(event) => setProtocol(event.target.value)} className="rounded bg-[#0f172a] px-3 py-2 text-sm text-white">
           <option value="">Todos los protocolos</option>
           {protocols.map((item) => <option key={item} value={item}>{item.toUpperCase()}</option>)}
         </select>
-        <select aria-label="Riesgo" value={risk} onChange={(event) => setRisk(event.target.value)} className="rounded bg-[#0f172a] px-3 py-2 text-sm text-white">
-          <option value="">Todos los riesgos</option>
-          {["CRÍTICO", "ALTO", "MEDIO", "BAJO"].map((item) => <option key={item}>{item}</option>)}
-        </select>
+        {!isNetwork && (
+          <select aria-label="Riesgo" value={risk} onChange={(event) => setRisk(event.target.value)} className="rounded bg-[#0f172a] px-3 py-2 text-sm text-white">
+            <option value="">Todos los riesgos</option>
+            {["CRÍTICO", "ALTO", "MEDIO", "BAJO"].map((item) => <option key={item}>{item}</option>)}
+          </select>
+        )}
       </div>
       {isIds && (
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -127,8 +130,8 @@ export default function EventExplorer({ kind, title, description }: Props) {
                 <th className="p-3 text-left">Origen</th>
                 <th className="p-3 text-left">Destino</th>
                 <th className="p-3 text-left">Protocolo</th>
-                <th className="p-3 text-left">Riesgo</th>
-                {!isIds && <th className="p-3 text-left">Mensaje</th>}
+                {!isNetwork && <th className="p-3 text-left">Riesgo</th>}
+                {!isIds && !isNetwork && <th className="p-3 text-left">Mensaje</th>}
               </tr>
             </thead>
             <tbody>
@@ -142,8 +145,8 @@ export default function EventExplorer({ kind, title, description }: Props) {
                   <td className="p-3 font-mono">{value(row, "src_ip")}</td>
                   <td className="p-3 font-mono">{value(row, "dst_ip")}</td>
                   <td className="p-3 font-semibold text-sky-300">{value(row, "protocol").toUpperCase()}</td>
-                  <td className="p-3">{value(row, "risk_label")}</td>
-                  {!isIds && messageCell(row)}
+                  {!isNetwork && <td className="p-3">{value(row, "risk_label")}</td>}
+                  {!isIds && !isNetwork && messageCell(row)}
                 </tr>
               ))}
             </tbody>
