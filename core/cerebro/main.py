@@ -3,6 +3,7 @@ import json
 import redis
 import os
 import re
+import socket
 from pathlib import Path
 from datetime import datetime, timezone
 from elasticsearch import Elasticsearch, helpers
@@ -350,6 +351,45 @@ def _index_epoch(event, now=None):
     return now
 
 
+_SNORT_FLOW_RE = re.compile(
+    r"(?P<src_ip>\d{1,3}(?:\.\d{1,3}){3})(?::(?P<src_port>\d+))?\s*"
+    r"(?:-|=)>\s*"
+    r"(?P<dst_ip>\d{1,3}(?:\.\d{1,3}){3})(?::(?P<dst_port>\d+))?"
+)
+_SERVICE_ALIASES = {
+    "domain": "dns",
+    "http-alt": "http",
+    "microsoft-ds": "smb",
+    "netbios-ssn": "smb",
+}
+
+
+def infer_application_protocol(message, src_port=0, dst_port=0, transport="tcp"):
+    """Resolve the application protocol from a Snort message and its flow ports."""
+    text = str(message).lower()
+    known_markers = {
+        "ssh": "ssh", "modbus": "modbus", "iec-104": "iec104",
+        "iec104": "iec104", "iec-61850": "iec61850", "iec61850": "iec61850",
+        "smb": "smb", "dns": "dns", "http": "http", "https": "https",
+        "rdp": "rdp", "winrm": "winrm", "ftp": "ftp", "telnet": "telnet",
+    }
+    for marker, protocol in known_markers.items():
+        if marker in text:
+            return protocol
+
+    transport = str(transport or "tcp").lower()
+    for port in (dst_port, src_port):
+        try:
+            port = int(port)
+            if not 1 <= port <= 65535:
+                continue
+            service = socket.getservbyport(port, transport if transport in {"tcp", "udp"} else None)
+            return _SERVICE_ALIASES.get(service, service)
+        except (OSError, TypeError, ValueError):
+            continue
+    return transport if transport not in {"", "ids_alert", "unknown"} else "unknown"
+
+
 def normalizar_evento(raw_json):
     try:
         event = json.loads(raw_json)
@@ -383,15 +423,20 @@ def normalizar_evento(raw_json):
         if "snort" in file_path or event.get('source_type') == 'snort' or event.get('fields', {}).get('source_type') == 'snort':
             doc['source'] = 'snort'
             protocol_match = re.search(r'\{([A-Za-z0-9_-]+)\}', str(message_raw))
-            doc['protocol'] = protocol_match.group(1).lower() if protocol_match else 'ids_alert'
+            transport = protocol_match.group(1).lower() if protocol_match else "unknown"
+            doc['transport_protocol'] = transport
             doc['comando_humano'] = "🚨 Alerta IDS"
             doc['message'] = str(message_raw)
 
-            ips = re.findall(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', str(message_raw))
-            if len(ips) >= 1:
-                doc['src_ip'] = ips[0]
-            if len(ips) >= 2:
-                doc['dst_ip'] = ips[1]
+            flow_match = _SNORT_FLOW_RE.search(str(message_raw))
+            if flow_match:
+                doc['src_ip'] = flow_match.group('src_ip')
+                doc['dst_ip'] = flow_match.group('dst_ip')
+                doc['src_port'] = int(flow_match.group('src_port') or 0)
+                doc['dst_port'] = int(flow_match.group('dst_port') or 0)
+            doc['protocol'] = infer_application_protocol(
+                message_raw, doc.get('src_port', 0), doc.get('dst_port', 0), transport
+            )
         else:
             doc['source'] = 'zeek'
             doc['src_ip'] = zeek_data.get('id.orig_h') or zeek_data.get('id', {}).get('orig_h', '0.0.0.0')

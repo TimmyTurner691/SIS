@@ -8,7 +8,7 @@ from pathlib import Path
 CEREBRO_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CEREBRO_DIR))
 
-from main import _event_epoch, _index_epoch, normalizar_evento
+from main import _event_epoch, _index_epoch, infer_application_protocol, normalizar_evento
 
 
 class EventNormalizationTests(unittest.TestCase):
@@ -126,6 +126,20 @@ class EventNormalizationTests(unittest.TestCase):
         self.assertEqual("192.168.6.243", normalized["src_ip"])
         self.assertEqual("192.168.6.192", normalized["dst_ip"])
         self.assertEqual("icmp", normalized["protocol"])
+
+    def test_snort_ssh_is_inferred_from_ports(self):
+        event = {
+            "source_type": "snort",
+            "message": "[**] [1:1100403:1] Connection attempt [**] {TCP} 192.168.1.83:42631 -> 192.168.1.85:22",
+        }
+        normalized = normalizar_evento(json.dumps(event))
+        self.assertEqual("ssh", normalized["protocol"])
+        self.assertEqual("tcp", normalized["transport_protocol"])
+        self.assertEqual(42631, normalized["src_port"])
+        self.assertEqual(22, normalized["dst_port"])
+
+    def test_signature_marker_takes_precedence_over_transport(self):
+        self.assertEqual("ssh", infer_application_protocol("SIS Linux SSH detectado", 50000, 22, "tcp"))
 
 
 if __name__ == "__main__":
