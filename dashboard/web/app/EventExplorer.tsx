@@ -130,6 +130,7 @@ export default function EventExplorer({ kind, title, description }: Props) {
                 <th className="p-3 text-left">Origen</th>
                 <th className="p-3 text-left">Destino</th>
                 <th className="p-3 text-left">Protocolo</th>
+                {isNetwork && <th className="p-3 text-left">Puerto destino</th>}
                 {!isNetwork && <th className="p-3 text-left">Riesgo</th>}
                 {!isIds && !isNetwork && <th className="p-3 text-left">Mensaje</th>}
               </tr>
@@ -145,6 +146,7 @@ export default function EventExplorer({ kind, title, description }: Props) {
                   <td className="p-3 font-mono">{value(row, "src_ip")}</td>
                   <td className="p-3 font-mono">{value(row, "dst_ip")}</td>
                   <td className="p-3 font-semibold text-sky-300">{value(row, "protocol").toUpperCase()}</td>
+                  {isNetwork && <td className="p-3 font-mono">{value(row, "dst_port")}</td>}
                   {!isNetwork && <td className="p-3">{value(row, "risk_label")}</td>}
                   {!isIds && !isNetwork && messageCell(row)}
                 </tr>

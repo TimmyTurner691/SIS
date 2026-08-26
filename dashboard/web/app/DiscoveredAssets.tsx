@@ -2,11 +2,21 @@
 import { useEffect, useState } from 'react';
 import { Radar } from 'lucide-react';
 
+type DiscoveredAsset = {
+    ip: string;
+    hostname?: string;
+    mac?: string;
+    vendor_oui?: string;
+    criticidad_sugerida?: string;
+};
+
 export default function DiscoveredAssets() {
-    const [assets, setAssets] = useState<any[]>([]);
+    const [assets, setAssets] = useState<DiscoveredAsset[]>([]);
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [loading, setLoading] = useState(false);
     const [query, setQuery] = useState('');
+    const visibleAssets = assets.filter(asset => JSON.stringify(asset).toLowerCase().includes(query.toLowerCase()));
+    const allVisibleSelected = visibleAssets.length > 0 && visibleAssets.every(asset => selected.has(asset.ip));
 
     useEffect(() => {
         fetch('/api/assets/discovered')
@@ -19,6 +29,13 @@ export default function DiscoveredAssets() {
         if (newSelected.has(ip)) newSelected.delete(ip);
         else newSelected.add(ip);
         setSelected(newSelected);
+    };
+
+    const toggleSelectAll = () => {
+        const next = new Set(selected);
+        if (allVisibleSelected) visibleAssets.forEach(asset => next.delete(asset.ip));
+        else visibleAssets.forEach(asset => asset.ip && next.add(asset.ip));
+        setSelected(next);
     };
 
     const promoteSelected = async () => {
@@ -37,7 +54,7 @@ export default function DiscoveredAssets() {
             const data = await res.json();
             alert(data.message || data.error);
             setSelected(new Set()); // Limpiamos selección
-        } catch (err) {
+        } catch {
             alert("Error al comunicarse con el servidor.");
         } finally {
             setLoading(false);
@@ -51,13 +68,18 @@ export default function DiscoveredAssets() {
                     <Radar className="w-5 h-5 text-gray-400" />
                     Equipos Descubiertos
                 </h2>
-                <button
-                    onClick={promoteSelected}
-                    disabled={selected.size === 0 || loading}
-                    className="bg-[#5F13CF] hover:bg-purple-700 disabled:bg-gray-600 text-white px-4 py-2 rounded transition-colors"
-                >
-                    {loading ? 'Procesando...' : `Promover Seleccionados (${selected.size})`}
-                </button>
+                <div className="flex flex-wrap gap-2">
+                    <button onClick={toggleSelectAll} disabled={!visibleAssets.length || loading} className="border border-[#5F13CF] text-purple-300 hover:bg-purple-500/10 disabled:opacity-40 px-4 py-2 rounded transition-colors">
+                        {allVisibleSelected ? 'Deseleccionar visibles' : `Seleccionar todos (${visibleAssets.length})`}
+                    </button>
+                    <button
+                        onClick={promoteSelected}
+                        disabled={selected.size === 0 || loading}
+                        className="bg-[#5F13CF] hover:bg-purple-700 disabled:bg-gray-600 text-white px-4 py-2 rounded transition-colors"
+                    >
+                        {loading ? 'Procesando...' : `Promover Seleccionados (${selected.size})`}
+                    </button>
+                </div>
             </div>
 
             <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Filtrar por IP, hostname, MAC, fabricante o criticidad" className="mb-4 w-full rounded bg-[#111827] px-3 py-2 text-sm text-white" />
@@ -74,7 +96,7 @@ export default function DiscoveredAssets() {
                         </tr>
                     </thead>
                     <tbody>
-                        {assets.filter(asset => JSON.stringify(asset).toLowerCase().includes(query.toLowerCase())).map((asset, i) => (
+                        {visibleAssets.map((asset, i) => (
                             <tr key={i} className="border-b border-gray-800 hover:bg-[#5F13CF]/10 transition-colors">
                                 <td className="p-3">
                                     <input
