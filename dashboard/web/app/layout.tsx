@@ -56,7 +56,7 @@ export default function RootLayout({
         </aside>
 
         {/* CONTENEDOR PRINCIPAL */}
-        <div className="flex-1 ml-64 flex flex-col min-h-screen">
+        <div className="flex-1 ml-64 flex flex-col min-h-screen bg-[#0b1120]">
 
           {/* BARRA SUPERIOR (Navbar) */}
           <header className="h-16 bg-[#1e293b] border-b border-slate-700/50 flex items-center justify-between px-6 sticky top-0 z-10 shadow-sm">
@@ -65,7 +65,7 @@ export default function RootLayout({
           </header>
 
           {/* CONTENIDO DE LAS PÁGINAS */}
-          <main className="flex-1 p-6">
+          <main className="flex-1 bg-[#0b1120] p-6 text-gray-200">
             {children}
           </main>
         </div>
