@@ -30,6 +30,8 @@ class TrashEventCleanupTests(unittest.TestCase):
         self.assertNotIn("1100802", serialized_query)
         self.assertIn("SIS ICMP detectado", serialized_query)
         self.assertIn("detection_model_version", serialized_query)
+        self.assertIn("dst_port", serialized_query)
+        self.assertIn("8080", serialized_query)
 
     def test_cleanup_failure_does_not_stop_cerebro(self):
         es = Mock()

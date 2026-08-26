@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { formatSantiagoTimestamp } from "./lib/time";
+import { formatSantiagoTimestamp, formatSantiagoTimestampWithZone } from "./lib/time";
 
 type EventDoc = Record<string, unknown>;
 
@@ -175,9 +175,9 @@ export default function EventExplorer({ kind, title, description }: Props) {
       {detailRow && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-6" role="dialog" aria-modal="true" aria-label="Detalle del audit log" onClick={() => setDetailRow(null)}>
           <div className="max-h-[85vh] w-full max-w-4xl overflow-auto rounded-xl border border-sky-500/30 bg-[#111827] p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
-            <div className="mb-5 flex items-start justify-between gap-4"><div><h2 className="text-xl font-bold text-white">Detalle del Audit Log</h2><p className="text-sm text-gray-400">Horario de Santiago · UTC-4/UTC-3 según horario oficial</p></div><button onClick={() => setDetailRow(null)} className="rounded border border-slate-600 px-3 py-1 text-gray-300 hover:bg-slate-700">Cerrar</button></div>
+            <div className="mb-5 flex items-start justify-between gap-4"><h2 className="text-xl font-bold text-white">Detalle del Audit Log</h2><button onClick={() => setDetailRow(null)} className="rounded border border-slate-600 px-3 py-1 text-gray-300 hover:bg-slate-700">Cerrar</button></div>
             <dl className="grid gap-4 md:grid-cols-2">
-              {[['Timestamp', formatSantiagoTimestamp(detailRow['@timestamp'])], ['UUID', (() => { try { return String(detailRow.uid ?? JSON.parse(fullMessage).uid ?? '—'); } catch { return String(detailRow.uid ?? '—'); } })()], ['Origen', value(detailRow, 'src_ip')], ['Destino', value(detailRow, 'dst_ip')], ['Protocolo', value(detailRow, 'protocol').toUpperCase()], ['Riesgo', value(detailRow, 'risk_label')]].map(([label, content]) => <div key={label}><dt className="text-xs uppercase tracking-wider text-sky-400">{label}</dt><dd className="mt-1 break-all text-sm text-gray-200">{content}</dd></div>)}
+              {[['Timestamp', formatSantiagoTimestampWithZone(detailRow['@timestamp'])], ['UUID', (() => { try { return String(detailRow.uid ?? JSON.parse(fullMessage).uid ?? '—'); } catch { return String(detailRow.uid ?? '—'); } })()], ['Origen', value(detailRow, 'src_ip')], ['Destino', value(detailRow, 'dst_ip')], ['Protocolo', value(detailRow, 'protocol').toUpperCase()], ['Riesgo', value(detailRow, 'risk_label')]].map(([label, content]) => <div key={label}><dt className="text-xs uppercase tracking-wider text-sky-400">{label}</dt><dd className="mt-1 break-all text-sm text-gray-200">{content}</dd></div>)}
             </dl>
             <div className="mt-6"><h3 className="mb-2 text-xs uppercase tracking-wider text-sky-400">Mensaje original completo</h3><pre className="whitespace-pre-wrap break-words rounded-lg bg-[#0b1120] p-4 text-xs leading-relaxed text-gray-300">{fullMessage}</pre></div>
           </div>

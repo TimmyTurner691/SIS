@@ -8,7 +8,7 @@ from pathlib import Path
 CEREBRO_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CEREBRO_DIR))
 
-from main import _event_epoch, _index_epoch, ids_exception_fingerprint, infer_application_protocol, load_ids_exceptions, normalizar_evento, should_emit_ids_alert
+from main import _event_epoch, _index_epoch, ids_exception_fingerprint, infer_application_protocol, is_sis_management_traffic, load_ids_exceptions, normalizar_evento, should_emit_ids_alert
 
 
 class EventNormalizationTests(unittest.TestCase):
@@ -145,6 +145,20 @@ class EventNormalizationTests(unittest.TestCase):
 
     def test_signature_marker_takes_precedence_over_transport(self):
         self.assertEqual("ssh", infer_application_protocol("SIS Linux SSH detectado", 50000, 22, "tcp"))
+
+    def test_dashboard_management_traffic_is_discarded(self):
+        event = {
+            "log": {"file": {"path": "/logs/zeek/conn.log"}},
+            "message": json.dumps({
+                "id.orig_h": "192.168.1.83",
+                "id.resp_h": "192.168.1.85",
+                "id.resp_p": 8080,
+                "proto": "tcp",
+            }),
+        }
+        self.assertIsNone(normalizar_evento(json.dumps(event)))
+        self.assertTrue(is_sis_management_traffic({"dst_port": "8080"}))
+        self.assertFalse(is_sis_management_traffic({"dst_port": 8081}))
 
     def test_persisted_ids_exceptions_are_restored_to_redis(self):
         class FakeEs:

@@ -36,6 +36,11 @@ BATCH_SIZE = 5000
 DIRECT_LOG_POLL_ENABLED = os.getenv("SIS_DIRECT_LOG_POLL_ENABLED", "false").lower() == "true"
 DIRECT_LOG_POLL_INTERVAL = float(os.getenv("SIS_DIRECT_LOG_POLL_INTERVAL", "1.0"))
 DIRECT_LOG_MAX_LINES = int(os.getenv("SIS_DIRECT_LOG_MAX_LINES", "1000"))
+IGNORED_MANAGEMENT_PORTS = {
+    int(port.strip())
+    for port in os.getenv("SIS_IGNORE_MANAGEMENT_PORTS", "8080").split(",")
+    if port.strip().isdigit()
+}
 
 # ================= LÓGICA DE TRADUCCIÓN =================
 # ... (Sin cambios en traducir_iec104) ...
@@ -206,11 +211,12 @@ def conectar_servicios():
     return r, es
 
 def purge_trash_events(es):
-    """Elimina históricos TEST, flujos 0.0.0.0 y falsos DoS del detector anterior."""
+    """Elimina históricos TEST, flujos inválidos, gestión del SIS y falsos DoS."""
     query = {
         "query": {
             "bool": {
                 "should": [
+                    {"terms": {"dst_port": sorted(IGNORED_MANAGEMENT_PORTS)}},
                     {"match_phrase": {"raw_log": "Ping Detectado en WiFi"}},
                     {"match_phrase": {"message": "Ping Detectado en WiFi"}},
                     {"query_string": {"query": "1000005", "fields": ["raw_log", "message"]}},
@@ -428,6 +434,14 @@ def should_emit_ids_alert(redis_client, doc):
     return bool(redis_client.set(key, "1", nx=True, ex=interval))
 
 
+def is_sis_management_traffic(doc):
+    """Identifica accesos al dashboard/proxy para que no contaminen la telemetría."""
+    try:
+        return int(doc.get("dst_port", 0)) in IGNORED_MANAGEMENT_PORTS
+    except (TypeError, ValueError):
+        return False
+
+
 def normalizar_evento(raw_json):
     try:
         event = json.loads(raw_json)
@@ -487,7 +501,8 @@ def normalizar_evento(raw_json):
                 doc['comando_humano'] = traducir_iec104(doc['sub_source'], str(message_raw))
             elif "conn.log" in file_path: doc['protocol'] = zeek_data.get('proto', 'tcp')
 
-        if (is_unspecified_traffic(doc) or is_unspecified_traffic(message_raw)
+        if (is_sis_management_traffic(doc)
+                or is_unspecified_traffic(doc) or is_unspecified_traffic(message_raw)
                 or is_loopback_or_test_traffic(doc)):
             return None
         return doc

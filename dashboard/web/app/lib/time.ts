@@ -22,3 +22,15 @@ export function formatSantiagoTime(value: unknown): string {
   const formatted = formatSantiagoTimestamp(value);
   return formatted === "—" ? formatted : formatted.slice(11, 16);
 }
+
+export function formatSantiagoTimestampWithZone(value: unknown): string {
+  const formatted = formatSantiagoTimestamp(value);
+  if (formatted === "—") return formatted;
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return formatted;
+  const zone = new Intl.DateTimeFormat("en-US", {
+    timeZone: SANTIAGO_TIME_ZONE,
+    timeZoneName: "shortOffset",
+  }).formatToParts(date).find(item => item.type === "timeZoneName")?.value.replace("GMT", "UTC") || "UTC";
+  return `${formatted} (${zone})`;
+}
