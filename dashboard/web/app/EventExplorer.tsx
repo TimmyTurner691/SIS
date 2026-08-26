@@ -81,8 +81,8 @@ export default function EventExplorer({ kind, title, description }: Props) {
           <table className="w-full text-xs text-gray-300">
             <thead className="bg-[#0e1624] text-sky-400">
               <tr>
-                {isIds && <th className="p-3 text-left">Mensaje</th>}
                 <th className="p-3 text-left">Timestamp</th>
+                {isIds && <th className="p-3 text-left">Mensaje</th>}
                 <th className="p-3 text-left">Origen</th>
                 <th className="p-3 text-left">Destino</th>
                 <th className="p-3 text-left">Protocolo</th>
@@ -93,8 +93,8 @@ export default function EventExplorer({ kind, title, description }: Props) {
             <tbody>
               {rows.map((row, index) => (
                 <tr key={String(row._id ?? index)} className="border-t border-slate-800 align-top">
-                  {isIds && messageCell(row)}
                   <td className="p-3 whitespace-nowrap">{value(row, "@timestamp")}</td>
+                  {isIds && messageCell(row)}
                   <td className="p-3 font-mono">{value(row, "src_ip")}</td>
                   <td className="p-3 font-mono">{value(row, "dst_ip")}</td>
                   <td className="p-3 font-semibold text-sky-300">{value(row, "protocol").toUpperCase()}</td>
