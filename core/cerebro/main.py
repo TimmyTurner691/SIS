@@ -362,6 +362,9 @@ _SERVICE_ALIASES = {
     "microsoft-ds": "smb",
     "netbios-ssn": "smb",
 }
+IDS_EXCEPTIONS_REDIS_KEY = "sis:ids:exceptions"
+IDS_EXCEPTIONS_INDEX = os.getenv("SIS_IDS_EXCEPTIONS_INDEX", "sis-ids-exceptions-v1")
+IDS_ALERT_INTERVALS = {"BAJO": 300, "MEDIO": 120, "ALTO": 60, "CRÍTICO": 30}
 
 
 def infer_application_protocol(message, src_port=0, dst_port=0, transport="tcp"):
@@ -388,6 +391,41 @@ def infer_application_protocol(message, src_port=0, dst_port=0, transport="tcp")
         except (OSError, TypeError, ValueError):
             continue
     return transport if transport not in {"", "ids_alert", "unknown"} else "unknown"
+
+
+def ids_exception_fingerprint(doc):
+    """Build the exact signature/flow identity used by IDS false-positive exceptions."""
+    return "|".join(str(doc.get(field, "")).lower() for field in (
+        "signature_sid", "src_ip", "dst_ip", "protocol"
+    ))
+
+
+def load_ids_exceptions(es, redis_client):
+    """Restore persisted IDS exception fingerprints into Redis after restarts."""
+    try:
+        response = es.search(index=IDS_EXCEPTIONS_INDEX, body={"query": {"match_all": {}}, "size": 10000})
+        fingerprints = [
+            hit.get("_source", {}).get("exception_fingerprint")
+            for hit in response.get("hits", {}).get("hits", [])
+        ]
+        fingerprints = [item for item in fingerprints if item]
+        redis_client.delete(IDS_EXCEPTIONS_REDIS_KEY)
+        if fingerprints:
+            redis_client.sadd(IDS_EXCEPTIONS_REDIS_KEY, *fingerprints)
+        return len(fingerprints)
+    except Exception as exc:
+        print(f"⚠️ No se pudieron restaurar excepciones IDS: {exc}", flush=True)
+        return 0
+
+
+def should_emit_ids_alert(redis_client, doc):
+    """Rate-limit each exact IDS signature/flow independently according to risk."""
+    if doc.get("source") != "snort":
+        return True
+    risk = str(doc.get("risk_label", "BAJO")).upper()
+    interval = IDS_ALERT_INTERVALS.get(risk, IDS_ALERT_INTERVALS["BAJO"])
+    key = f"sis:ids:throttle:{risk}:{ids_exception_fingerprint(doc)}"
+    return bool(redis_client.set(key, "1", nx=True, ex=interval))
 
 
 def normalizar_evento(raw_json):
@@ -427,6 +465,8 @@ def normalizar_evento(raw_json):
             doc['transport_protocol'] = transport
             doc['comando_humano'] = "🚨 Alerta IDS"
             doc['message'] = str(message_raw)
+            sid_match = re.search(r'\[\s*\d+\s*:\s*(\d+)\s*:\s*\d+\s*\]', str(message_raw))
+            doc['signature_sid'] = sid_match.group(1) if sid_match else "unknown"
 
             flow_match = _SNORT_FLOW_RE.search(str(message_raw))
             if flow_match:
@@ -603,6 +643,7 @@ def main():
     print(f"🚀 SIS Core v7.2: MONITOR DE CONSOLA ACTIVO", flush=True)
     r, es = conectar_servicios()
     purge_trash_events(es)
+    load_ids_exceptions(es, r)
     engine = RiskFusionEngine()
     discovered_assets = DiscoveredAssetStore(es, DISCOVERED_ASSETS_INDEX)
 
@@ -712,7 +753,11 @@ def main():
             normalized_events = []
             for raw_json in batch_raw:
                 doc = normalizar_evento(raw_json)
-                if doc and replay_guard.accept(raw_json):
+                is_excepted = bool(
+                    doc and doc.get("source") == "snort"
+                    and r.sismember(IDS_EXCEPTIONS_REDIS_KEY, ids_exception_fingerprint(doc))
+                )
+                if doc and not is_excepted and replay_guard.accept(raw_json):
                     normalized_events.append((raw_json, doc))
             if not normalized_events:
                 continue
@@ -751,6 +796,8 @@ def main():
                     detection_reason=detection_reason,
                     traffic_metrics=traffic_metrics,
                 )
+                if not should_emit_ids_alert(r, final_doc):
+                    continue
                 discovered_assets.process_event(raw_json, final_doc)
 
                 if final_doc.get('risk_label') == 'CRÍTICO':

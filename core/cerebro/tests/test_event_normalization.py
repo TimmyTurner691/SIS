@@ -8,7 +8,7 @@ from pathlib import Path
 CEREBRO_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CEREBRO_DIR))
 
-from main import _event_epoch, _index_epoch, infer_application_protocol, normalizar_evento
+from main import _event_epoch, _index_epoch, ids_exception_fingerprint, infer_application_protocol, load_ids_exceptions, normalizar_evento, should_emit_ids_alert
 
 
 class EventNormalizationTests(unittest.TestCase):
@@ -137,9 +137,43 @@ class EventNormalizationTests(unittest.TestCase):
         self.assertEqual("tcp", normalized["transport_protocol"])
         self.assertEqual(42631, normalized["src_port"])
         self.assertEqual(22, normalized["dst_port"])
+        self.assertEqual("1100403", normalized["signature_sid"])
+        self.assertEqual(
+            "1100403|192.168.1.83|192.168.1.85|ssh",
+            ids_exception_fingerprint(normalized),
+        )
 
     def test_signature_marker_takes_precedence_over_transport(self):
         self.assertEqual("ssh", infer_application_protocol("SIS Linux SSH detectado", 50000, 22, "tcp"))
+
+    def test_persisted_ids_exceptions_are_restored_to_redis(self):
+        class FakeEs:
+            def search(self, **_kwargs):
+                return {"hits": {"hits": [{"_source": {"exception_fingerprint": "1|a|b|icmp"}}]}}
+        class FakeRedis:
+            def __init__(self): self.members = set()
+            def delete(self, _key): self.members.clear()
+            def sadd(self, _key, *values): self.members.update(values)
+        redis = FakeRedis()
+        self.assertEqual(1, load_ids_exceptions(FakeEs(), redis))
+        self.assertEqual({"1|a|b|icmp"}, redis.members)
+
+    def test_ids_rate_limit_is_scoped_by_risk_signature_and_flow(self):
+        class FakeRedis:
+            def __init__(self): self.keys = {}
+            def set(self, key, _value, nx, ex):
+                self.last_expiry = ex
+                if nx and key in self.keys: return None
+                self.keys[key] = True
+                return True
+        redis = FakeRedis()
+        alert = {"source": "snort", "risk_label": "BAJO", "signature_sid": "10", "src_ip": "a", "dst_ip": "b", "protocol": "icmp"}
+        self.assertTrue(should_emit_ids_alert(redis, alert))
+        self.assertEqual(300, redis.last_expiry)
+        self.assertFalse(should_emit_ids_alert(redis, alert))
+        self.assertTrue(should_emit_ids_alert(redis, {**alert, "dst_ip": "c"}))
+        self.assertTrue(should_emit_ids_alert(redis, {**alert, "risk_label": "CRÍTICO"}))
+        self.assertEqual(30, redis.last_expiry)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 
 type EventDoc = Record<string, unknown>;
 
@@ -19,6 +20,8 @@ export default function EventExplorer({ kind, title, description }: Props) {
   const [risk, setRisk] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [saving, setSaving] = useState(false);
   const isIds = kind === "ids";
 
   useEffect(() => {
@@ -57,6 +60,36 @@ export default function EventExplorer({ kind, title, description }: Props) {
     return <td className="min-w-[420px] max-w-3xl p-3" title={message}>{message}</td>;
   };
 
+  const toggleSelected = (id: string) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const markFalsePositive = async () => {
+    const alerts = rows.filter((row) => selected.has(String(row._id)));
+    if (!alerts.length) return;
+    setSaving(true);
+    try {
+      const response = await fetch("/api/ids/exceptions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ alerts }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error);
+      setRows((current) => current.filter((row) => !selected.has(String(row._id))));
+      setSelected(new Set());
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "No se pudo crear la excepción");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="space-y-5">
       <div>
@@ -74,6 +107,14 @@ export default function EventExplorer({ kind, title, description }: Props) {
           {["CRÍTICO", "ALTO", "MEDIO", "BAJO"].map((item) => <option key={item}>{item}</option>)}
         </select>
       </div>
+      {isIds && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <button onClick={markFalsePositive} disabled={!selected.size || saving} className="rounded border border-amber-500 px-4 py-2 text-sm text-amber-300 disabled:cursor-not-allowed disabled:opacity-40">
+            {saving ? "Guardando excepción…" : `Marcar falso positivo (${selected.size})`}
+          </button>
+          <Link href="/ids/excepciones" className="rounded bg-slate-800 px-4 py-2 text-sm text-sky-300 hover:bg-slate-700">Ver excepciones IDS</Link>
+        </div>
+      )}
       {loading && <p className="text-sky-400">Consultando telemetría…</p>}
       {error && <p className="text-red-400">{error}</p>}
       {!loading && !error && (
@@ -93,7 +134,10 @@ export default function EventExplorer({ kind, title, description }: Props) {
             <tbody>
               {rows.map((row, index) => (
                 <tr key={String(row._id ?? index)} className="border-t border-slate-800 align-top">
-                  <td className="p-3 whitespace-nowrap">{value(row, "@timestamp")}</td>
+                  <td className="p-3 whitespace-nowrap">
+                    {isIds && <input aria-label="Seleccionar alerta" type="checkbox" checked={selected.has(String(row._id))} onChange={() => toggleSelected(String(row._id))} className="mr-3 accent-amber-500" />}
+                    {value(row, "@timestamp")}
+                  </td>
                   {isIds && messageCell(row)}
                   <td className="p-3 font-mono">{value(row, "src_ip")}</td>
                   <td className="p-3 font-mono">{value(row, "dst_ip")}</td>

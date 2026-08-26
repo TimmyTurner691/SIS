@@ -17,7 +17,21 @@ function enrichProtocol(source: Record<string, unknown>) {
   const ports=[Number(source.dst_port||0),Number(source.src_port||0)];
   if(!ports.some(Boolean)){const match=text.match(/:\s*(\d+)\s*(?:-|=)>[^\n]*?:\s*(\d+)/);if(match)ports.push(Number(match[2]),Number(match[1]));}
   const inferred=marked||ports.map(port=>commonServices[port]).find(Boolean);
-  return {...source,protocol:inferred||(current==="ids_alert"?"unknown":current)};
+  return {...source,transport_protocol:source.transport_protocol||current,protocol:inferred||(current==="ids_alert"?"unknown":current)};
+}
+const riskIntervals: Record<string, number> = { "BAJO":300, "MEDIO":120, "ALTO":60, "CRÍTICO":30 };
+function throttleIds(rows: Array<Record<string, unknown>>) {
+  const lastSeen = new Map<string, number>();
+  return rows.filter(row => {
+    const sid=String(row.signature_sid||String(row.message||row.raw_log||"").match(/\[\s*\d+\s*:\s*(\d+)\s*:\s*\d+\s*\]/)?.[1]||"unknown");
+    const key=[sid,row.src_ip,row.dst_ip,row.protocol].map(value=>String(value||"").toLowerCase()).join("|");
+    const timestamp=Date.parse(String(row["@timestamp"]||""))/1000;
+    const interval=riskIntervals[String(row.risk_label||"BAJO").toUpperCase()]||300;
+    const previous=lastSeen.get(key);
+    if(previous!==undefined && previous-timestamp<interval)return false;
+    lastSeen.set(key,timestamp);
+    return true;
+  });
 }
 export async function GET(request: NextRequest) {
   const p=request.nextUrl.searchParams, kind=p.get("kind")||"raw", q=p.get("q")?.trim(), protocol=p.get("protocol"), risk=p.get("risk");
@@ -28,6 +42,6 @@ export async function GET(request: NextRequest) {
     {terms:{"src_ip.keyword":["127.0.0.1","::1"]}},{terms:{"dst_ip.keyword":["127.0.0.1","::1"]}},
     {bool:{filter:[{term:{"src_ip.keyword":"0.0.0.0"}},{term:{"dst_ip.keyword":"0.0.0.0"}}]}}
   ];
-  try { const result=await client.search({index,size:Math.min(Number(p.get("size")||100),500),sort:[{"@timestamp":"desc"}],query:{bool:{filter,must,must_not}}} as any); return NextResponse.json({data:result.hits.hits.map((h:any)=>enrichProtocol({_id:h._id,...h._source})),total:typeof result.hits.total==="number"?result.hits.total:(result.hits.total as any)?.value||0}); }
+  try { const result=await client.search({index,size:Math.min(Number(p.get("size")||100),500),sort:[{"@timestamp":"desc"}],query:{bool:{filter,must,must_not}}} as any); const enriched=result.hits.hits.map((h:any)=>enrichProtocol({_id:h._id,...h._source})); const data=kind==="ids"?throttleIds(enriched):enriched; return NextResponse.json({data,total:typeof result.hits.total==="number"?result.hits.total:(result.hits.total as any)?.value||0}); }
   catch(e:any){ return NextResponse.json({error:e.message,data:[]},{status:500}); }
 }
