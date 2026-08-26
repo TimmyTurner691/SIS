@@ -3,50 +3,38 @@ import json
 import redis
 import os
 import re
-import pandas as pd
-import numpy as np
 from pathlib import Path
-from sklearn.ensemble import IsolationForest
-from datetime import datetime
-from collections import deque
+from datetime import datetime, timezone
 from elasticsearch import Elasticsearch, helpers
 import warnings
 from elasticsearch import ElasticsearchWarning
 from discovered_assets import DiscoveredAssetStore
-from discovered_assets import DiscoveredAssetStore
+from event_filter import contains_ipv6, is_legacy_test_alert, is_loopback_or_test_traffic, is_unspecified_traffic
+from traffic_analysis import EventReplayGuard, TrafficBaselineModel, TrafficRateMonitor
 
 warnings.filterwarnings("ignore", category=ElasticsearchWarning)
 
 try:
     from utils_alert import send_email_alert
 except ImportError:
-    # Agregamos los parámetros opcionales aquí también para que no de error
     def send_email_alert(subject, body, level="INFO", receiver_email=None):
-        destino = receiver_email if receiver_email else "DEFAULT"
-        print(f"📧 [EMAIL SIMULADO] {subject} -> Para: {destino}", flush=True)
-        return True
-
-from utils_env import get_env_int, get_env_bool, get_env_float
+        print(f"📧 [EMAIL SIMULADO] {subject} -> {receiver_email or 'DEFAULT'}", flush=True)
 
 # ================= CONFIGURACIÓN NITRO =================
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-REDIS_PORT = get_env_int("REDIS_PORT", 6379)
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 ELASTIC_HOST = os.getenv("ELASTIC_HOST", "elasticsearch")
-ELASTIC_PORT = get_env_int("ELASTIC_PORT", 9200)
+ELASTIC_PORT = int(os.getenv("ELASTIC_PORT", "9200"))
 REDIS_KEY = os.getenv("REDIS_KEY", "sis_queue")
 INDEX_NAME = os.getenv("SIS_INDEX_NAME", "sis-logs-v1")
 DISCOVERED_ASSETS_INDEX = os.getenv("SIS_DISCOVERED_ASSETS_INDEX", "sis-discovered-assets-v3")
 INVENTORY_FILE = os.getenv("SIS_INVENTORY_PATH", "/app/ot_inventory.json")
 
-IA_WINDOW_SIZE = 500
-IA_CONTAMINATION = 0.05
-BATCH_SIZE = 5000       
-FLUSH_INTERVAL = 0.5    
+BATCH_SIZE = 5000
 
-FLOOD_THRESHOLD = 100 
-DIRECT_LOG_POLL_ENABLED = get_env_bool("SIS_DIRECT_LOG_POLL_ENABLED", True)
-DIRECT_LOG_POLL_INTERVAL = get_env_float("SIS_DIRECT_LOG_POLL_INTERVAL", 1.0)
-DIRECT_LOG_MAX_LINES = get_env_int("SIS_DIRECT_LOG_MAX_LINES", 1000)
+DIRECT_LOG_POLL_ENABLED = os.getenv("SIS_DIRECT_LOG_POLL_ENABLED", "false").lower() == "true"
+DIRECT_LOG_POLL_INTERVAL = float(os.getenv("SIS_DIRECT_LOG_POLL_INTERVAL", "1.0"))
+DIRECT_LOG_MAX_LINES = int(os.getenv("SIS_DIRECT_LOG_MAX_LINES", "1000"))
 
 # ================= LÓGICA DE TRADUCCIÓN =================
 # ... (Sin cambios en traducir_iec104) ...
@@ -74,54 +62,50 @@ class MitreICSCorrelator:
     def __init__(self):
         self.mitre_rules = {
             'discovery': {'id': 'T0846', 'tactic': 'Discovery', 'name': 'Network Scan'},
-            'c2_ot':     {'id': 'T0869', 'tactic': 'Command and Control', 'name': 'Standard Protocol (OT)'},
-            'exploit':   {'id': 'T0883', 'tactic': 'Execution', 'name': 'Exploitation'},
-            'impact':    {'id': 'T0814', 'tactic': 'Impact', 'name': 'DoS / Process Impact'},
+            'c2_ot': {'id': 'T0869', 'tactic': 'Command and Control', 'name': 'Standard Protocol (OT)'},
+            'exploit': {'id': 'T0883', 'tactic': 'Execution', 'name': 'Exploitation'},
+            'impact': {'id': 'T0814', 'tactic': 'Impact', 'name': 'DoS / Process Impact'},
         }
 
-    def procesar(self, doc, is_flood):
+    def procesar(self, doc, is_flood, anomaly_score):
         detected = []
-        mitre_info = {"mitre_score": 1, "mitre_msg": "Info", "mitre_tactics": [], "mitre_techniques": []}
+        text = f"{doc.get('message', '')} {doc.get('raw_log', '')}".lower()
+        description = doc.get('comando_humano', '')
 
         if is_flood:
-            detected.append(self.mitre_rules['impact'])
-            detected.append(self.mitre_rules['c2_ot'])
+            detected.extend([self.mitre_rules['impact'], self.mitre_rules['c2_ot']])
             score = 25
-            msg = "CRÍTICO: Inundación de Red (DoS)"
+            message = "CRÍTICO: Inundación de Red (DoS) confirmada"
         else:
-            desc = doc.get('comando_humano', '')
-            if doc['source'] == 'snort':
-                snort_text = f"{doc.get('message', '')} {doc.get('raw_log', '')}".lower()
-
-                if 'dos' in snort_text or 'flood' in snort_text or 'critical flood' in snort_text:
-                    detected.append(self.mitre_rules['impact'])
-                    detected.append(self.mitre_rules['c2_ot'])
-                else:
-                    detected.append(self.mitre_rules['discovery'])
-            elif doc['protocol'] == 'iec104':
+            is_icmp_monitoring = "icmp" in text and "sis icmp detectado" in text
+            if "exploit" in text:
+                detected.append(self.mitre_rules['exploit'])
+            elif doc.get('source') == 'snort' and not is_icmp_monitoring:
+                detected.append(self.mitre_rules['discovery'])
+            elif doc.get('protocol') == 'iec104':
                 detected.append(self.mitre_rules['c2_ot'])
-                if 'Interrogación' in desc and doc.get('ai_score', 0) < -0.35:
+                if 'Interrogación' in description and anomaly_score < -0.15:
                     detected.append(self.mitre_rules['discovery'])
-            
-            if doc.get('ai_score', 0) < -0.35:
-                 detected.append(self.mitre_rules['discovery'])
 
-            score = 1; msg = "Monitorización Normal"
-            tactics = set()
-            for rule in detected: tactics.add(rule['tactic'])
+            tactics = {rule['tactic'] for rule in detected}
+            if 'Execution' in tactics:
+                score, message = 15, "ALERTA: Posible explotación"
+            elif 'Command and Control' in tactics:
+                score, message = 10, "ALERTA: Tráfico SCADA"
+            elif 'Discovery' in tactics:
+                score, message = 5, "BAJO: Actividad de descubrimiento"
+            else:
+                score, message = 1, "Monitorización normal"
 
-            if 'Impact' in tactics: score = 25; msg = "CRÍTICO: Impacto Operativo"
-            elif 'Command and Control' in tactics: score = 10; msg = "ALERTA: Tráfico SCADA"
-            elif 'Discovery' in tactics: score = 5; msg = "BAJO: Escaneo"
+        tactics = {rule['tactic'] for rule in detected}
+        techniques = {rule['id'] for rule in detected}
+        return {
+            "mitre_score": score,
+            "mitre_msg": message,
+            "mitre_tactics": list(tactics),
+            "mitre_techniques": list(techniques),
+        }
 
-        tactics = set(); techniques = set()
-        for rule in detected: tactics.add(rule['tactic']); techniques.add(rule['id'])
-
-        mitre_info['mitre_score'] = score
-        mitre_info['mitre_msg'] = msg
-        mitre_info['mitre_tactics'] = list(tactics)
-        mitre_info['mitre_techniques'] = list(techniques)
-        return mitre_info
 
 class RiskFusionEngine:
     def __init__(self):
@@ -131,64 +115,50 @@ class RiskFusionEngine:
 
     def load_inventory(self):
         try:
-            with open(INVENTORY_FILE, 'r') as f:
-                data = json.load(f)
-                for item in data: self.inventory[item.get('ip')] = item.get('criticality', 'LOW')
-        except: pass
+            with open(INVENTORY_FILE, 'r') as stream:
+                data = json.load(stream)
+                for item in data:
+                    self.inventory[item.get('ip')] = item.get('criticality', 'LOW')
+        except Exception:
+            pass
 
-    def evaluar_riesgo(self, doc, anomaly_score, is_flood):
-        mitre_data = self.mitre.procesar(doc, is_flood)
-        dst_ip = doc.get('dst_ip', '0.0.0.0')
-        criticidad = self.inventory.get(dst_ip, 'LOW')
-        
-        impacto = 1
-        if criticidad == 'CRITICAL': impacto = 5
-        elif criticidad == 'HIGH': impacto = 3
-        
+    def evaluar_riesgo(self, doc, anomaly_score, is_flood, detection_reason=None, traffic_metrics=None):
+        mitre_data = self.mitre.procesar(doc, is_flood, anomaly_score)
+        criticidad = self.inventory.get(doc.get('dst_ip'), 'LOW')
+        impacto = 5 if criticidad == 'CRITICAL' else 3 if criticidad == 'HIGH' else 1
+
         if is_flood:
-            probabilidad = 5; impacto = 5
+            probability = 5
+            impacto = 5
         else:
-            probabilidad = max(mitre_data['mitre_score'] // 5, 1)
-            if anomaly_score < -0.35: probabilidad = 4 
-        
-        total_score = probabilidad * impacto
-        
-        label = "BAJO"
-        if total_score >= 20: label = "CRÍTICO"
-        elif total_score >= 15: label = "ALTO"
-        elif total_score >= 8: label = "MEDIO"
+            tactics = set(mitre_data['mitre_tactics'])
+            if 'Execution' in tactics:
+                probability = 3
+            elif 'Command and Control' in tactics or 'Discovery' in tactics:
+                probability = 2
+            else:
+                probability = 1
 
-        # ===========================================================
-        # NUEVO: OVERRIDE DE PRIORIDAD (HARDCODING DEFENSIVO)
-        # ===========================================================
-        if doc.get('source') == 'snort':
-            mensaje_alerta = doc.get('message', '').upper()
-            
-            # Si Snort dice que es Crítico o Prioridad 1, forzamos el pánico
-            if "[CRITICO]" in mensaje_alerta or "PRIORITY: 1" in mensaje_alerta:
-                total_score = 25
-                label = "CRÍTICO"
-                impacto = 5
-                probabilidad = 5
-                doc["ai_score_override"] = True  # Marca de auditoría
-                
-            # Si Snort dice que es Alto o Prioridad 2, lo subimos a nivel rojo/naranja
-            elif "[ALTO]" in mensaje_alerta or "PRIORITY: 2" in mensaje_alerta:
-                if total_score < 15: # Solo reescribimos si la IA le dio un score bajo
-                    total_score = 15
-                    label = "ALTO"
-                    impacto = 3
-                    probabilidad = 5
-                    doc["ai_score_override"] = True
-        # ===========================================================
+            # ML is supporting evidence only. It may raise likelihood one level,
+            # but cannot turn normal traffic into a critical DoS by itself.
+            if anomaly_score < -0.10:
+                probability = min(probability + 1, 2 if not tactics else 3)
 
+        total_score = probability * impacto
+        label = "CRÍTICO" if total_score >= 15 else "MEDIO" if total_score >= 8 else "BAJO"
+        traffic_metrics = traffic_metrics or {}
         doc.update(mitre_data)
         doc.update({
-            "risk_total_score": total_score, 
+            "risk_total_score": total_score,
             "risk_label": label,
-            "risk_impact": impacto, 
-            "risk_probability": probabilidad,
-            "ai_score": anomaly_score
+            "risk_impact": impacto,
+            "risk_probability": probability,
+            "ai_score": anomaly_score,
+            "dos_confirmed": bool(is_flood),
+            "detection_model_version": 2,
+            "detection_reason": detection_reason or "none",
+            "traffic_eps": round(float(traffic_metrics.get('accepted_eps', 0.0)), 2),
+            "flow_eps": round(float(traffic_metrics.get('max_flow_eps', 0.0)), 2),
         })
         return doc
 
@@ -234,6 +204,152 @@ def conectar_servicios():
             time.sleep(5)
     return r, es
 
+def purge_trash_events(es):
+    """Elimina históricos TEST, flujos 0.0.0.0 y falsos DoS del detector anterior."""
+    query = {
+        "query": {
+            "bool": {
+                "should": [
+                    {"match_phrase": {"raw_log": "Ping Detectado en WiFi"}},
+                    {"match_phrase": {"message": "Ping Detectado en WiFi"}},
+                    {"query_string": {"query": "1000005", "fields": ["raw_log", "message"]}},
+                    {
+                        "bool": {
+                            "filter": [
+                                {
+                                    "bool": {
+                                        "should": [
+                                            {"term": {"src_ip": "0.0.0.0"}},
+                                            {"term": {"src_ip.keyword": "0.0.0.0"}},
+                                        ],
+                                        "minimum_should_match": 1,
+                                    }
+                                },
+                                {
+                                    "bool": {
+                                        "should": [
+                                            {"term": {"dst_ip": "0.0.0.0"}},
+                                            {"term": {"dst_ip.keyword": "0.0.0.0"}},
+                                        ],
+                                        "minimum_should_match": 1,
+                                    }
+                                },
+                            ]
+                        }
+                    },
+                    {
+                        "query_string": {
+                            "query": '"0.0.0.0 -> 0.0.0.0"',
+                            "fields": ["raw_log", "message"],
+                        }
+                    },
+                    {
+                        "bool": {
+                            "filter": [
+                                {"match_phrase": {"mitre_msg": "CRÍTICO: Inundación de Red (DoS)"}},
+                            ],
+                            "must_not": [{"exists": {"field": "dos_confirmed"}}],
+                        }
+                    },
+                    {
+                        "bool": {
+                            "filter": [
+                                {"term": {"dos_confirmed": True}},
+                                {
+                                    "bool": {
+                                        "should": [
+                                            {"term": {"protocol": "icmp"}},
+                                            {"match_phrase": {"message": "SIS ICMP detectado"}},
+                                            {"match_phrase": {"raw_log": "SIS ICMP detectado"}},
+                                        ],
+                                        "minimum_should_match": 1,
+                                    }
+                                },
+                            ],
+                            "must_not": [{"exists": {"field": "detection_model_version"}}],
+                        }
+                    },
+                ],
+                "minimum_should_match": 1,
+            }
+        }
+    }
+    try:
+        result = es.delete_by_query(
+            index=INDEX_NAME,
+            body=query,
+            conflicts="proceed",
+            refresh=True,
+        )
+        deleted = result.get("deleted", 0)
+        if deleted:
+            print(f"🧹 Eliminados {deleted} eventos basura históricos de Elasticsearch", flush=True)
+        return deleted
+    except Exception as exc:
+        print(f"⚠️ No se pudieron purgar eventos basura históricos: {exc}", flush=True)
+        return 0
+
+
+_SNORT_TIMESTAMP_RE = re.compile(
+    r"(?<!\d)(\d{2})/(\d{2})-(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?"
+)
+
+
+def _event_epoch(event, message_raw, now=None):
+    """Uses sensor time first so replayed log backlogs are not treated as live bursts."""
+    now = time.time() if now is None else now
+    text = str(message_raw)
+    match = _SNORT_TIMESTAMP_RE.search(text)
+    if match:
+        month, day, hour, minute, second, fraction = match.groups()
+        microsecond = int((fraction or "0").ljust(6, "0")[:6])
+        current = datetime.fromtimestamp(now, timezone.utc)
+        candidate = datetime(
+            current.year,
+            int(month),
+            int(day),
+            int(hour),
+            int(minute),
+            int(second),
+            microsecond,
+            tzinfo=timezone.utc,
+        )
+        if candidate.timestamp() > now + 86400:
+            candidate = candidate.replace(year=current.year - 1)
+        return candidate.timestamp()
+
+    zeek_payload = message_raw if isinstance(message_raw, dict) else {}
+    if isinstance(message_raw, str):
+        try:
+            zeek_payload = json.loads(message_raw)
+        except (TypeError, json.JSONDecodeError):
+            pass
+    try:
+        return float(zeek_payload.get("ts"))
+    except (AttributeError, TypeError, ValueError):
+        pass
+
+    timestamp = event.get("@timestamp")
+    if timestamp:
+        try:
+            return datetime.fromisoformat(str(timestamp).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            pass
+    return now
+
+
+def _index_epoch(event, now=None):
+    """Uses Filebeat ingestion time for dashboard visibility, falling back to current time."""
+    now = time.time() if now is None else now
+    timestamp = event.get("@timestamp")
+    if timestamp:
+        try:
+            return datetime.fromisoformat(str(timestamp).replace("Z", "+00:00")).timestamp()
+        except (TypeError, ValueError):
+            pass
+    return now
+
+
 def normalizar_evento(raw_json):
     try:
         event = json.loads(raw_json)
@@ -245,16 +361,29 @@ def normalizar_evento(raw_json):
             except: pass
         elif isinstance(message_raw, dict): zeek_data = message_raw
 
+        # Descarta ruido fuera de alcance antes de enriquecer e indexar.
+        if contains_ipv6(message_raw) or contains_ipv6(zeek_data):
+            return None
+        if (is_legacy_test_alert(message_raw) or is_legacy_test_alert(event)
+                or is_loopback_or_test_traffic(message_raw)
+                or is_loopback_or_test_traffic(event)):
+            return None
+
+        now_epoch = time.time()
+        event_epoch = _event_epoch(event, message_raw, now=now_epoch)
+        index_epoch = _index_epoch(event, now=now_epoch)
         doc = {
-            "@timestamp": datetime.now().isoformat(),
+            "@timestamp": datetime.fromtimestamp(index_epoch, timezone.utc).isoformat(),
+            "_event_epoch": event_epoch,
             "raw_log": str(message_raw)[:500],
             "src_ip": "0.0.0.0", "dst_ip": "0.0.0.0", "dst_port": 0,
             "protocol": "unknown", "source": "unknown", "comando_humano": "N/A"
         }
 
-        if "snort" in file_path or event.get('fields', {}).get('source_type') == 'snort':
+        if "snort" in file_path or event.get('source_type') == 'snort' or event.get('fields', {}).get('source_type') == 'snort':
             doc['source'] = 'snort'
-            doc['protocol'] = 'ids_alert'
+            protocol_match = re.search(r'\{([A-Za-z0-9_-]+)\}', str(message_raw))
+            doc['protocol'] = protocol_match.group(1).lower() if protocol_match else 'ids_alert'
             doc['comando_humano'] = "🚨 Alerta IDS"
             doc['message'] = str(message_raw)
 
@@ -272,17 +401,12 @@ def normalizar_evento(raw_json):
                 doc['protocol'] = 'iec104'; doc['sub_source'] = os.path.basename(file_path)
                 doc['comando_humano'] = traducir_iec104(doc['sub_source'], str(message_raw))
             elif "conn.log" in file_path: doc['protocol'] = zeek_data.get('proto', 'tcp')
+
+        if (is_unspecified_traffic(doc) or is_unspecified_traffic(message_raw)
+                or is_loopback_or_test_traffic(doc)):
+            return None
         return doc
-    except Exception as e:
-        print(f"⚠️ [PARSE ERROR] Fallo al parsear evento: {e}", flush=True)
-        return {
-            "@timestamp": datetime.now().isoformat(),
-            "raw_log": str(raw_json)[:500],
-            "src_ip": "0.0.0.0", "dst_ip": "0.0.0.0", "dst_port": 0,
-            "protocol": "parse_error", "source": "unknown", "comando_humano": f"❌ Error de Parseo: {e}",
-            "message": str(raw_json),
-            "risk_total_score": 0, "risk_label": "BAJO"
-        }
+    except: return None
 
 
 def _source_type_for_direct_log(path):
@@ -313,7 +437,12 @@ def poll_direct_source_logs(offsets, max_lines=DIRECT_LOG_MAX_LINES):
     for path in _iter_direct_log_files():
         try:
             current_size = path.stat().st_size
-            previous_offset = offsets.get(str(path), 0)
+            if str(path) not in offsets:
+                # Tail from startup: Filebeat owns historical delivery. This fallback
+                # only consumes lines written after Cerebro starts.
+                offsets[str(path)] = current_size
+                continue
+            previous_offset = offsets[str(path)]
             if current_size < previous_offset:
                 previous_offset = 0
 
@@ -340,26 +469,12 @@ def poll_direct_source_logs(offsets, max_lines=DIRECT_LOG_MAX_LINES):
     return events
 
 def reset_brain_state():
-    model = IsolationForest(contamination=IA_CONTAMINATION, n_jobs=-1)
-    stats = {'total': 0, 'snort': 0}
-    history = deque(maxlen=IA_WINDOW_SIZE)
-    is_trained = False
-    alert_cooldown = {}
-    metrics_start_time = time.time()
-    metrics_count = 0
-    current_eps = 0.0
-    last_print_time = time.time()
-
     return {
-        "model": model,
-        "stats": stats,
-        "history": history,
-        "is_trained": is_trained,
-        "alert_cooldown": alert_cooldown,
-        "metrics_start_time": metrics_start_time,
-        "metrics_count": metrics_count,
-        "current_eps": current_eps,
-        "last_print_time": last_print_time,
+        "traffic_monitor": TrafficRateMonitor(),
+        "baseline_model": TrafficBaselineModel(),
+        "replay_guard": EventReplayGuard(),
+        "alert_cooldown": {},
+        "last_print_time": time.time(),
         "direct_log_offsets": {},
         "last_direct_poll": 0,
     }
@@ -442,19 +557,15 @@ def full_reset_demo(es, r, engine):
 def main():
     print(f"🚀 SIS Core v7.2: MONITOR DE CONSOLA ACTIVO", flush=True)
     r, es = conectar_servicios()
+    purge_trash_events(es)
     engine = RiskFusionEngine()
-    discovered_assets = DiscoveredAssetStore(es, DISCOVERED_ASSETS_INDEX)
     discovered_assets = DiscoveredAssetStore(es, DISCOVERED_ASSETS_INDEX)
 
     state = reset_brain_state()
-    model = state["model"]
-    stats = state["stats"]
-    history = state["history"]
-    is_trained = state["is_trained"]
+    traffic_monitor = state["traffic_monitor"]
+    baseline_model = state["baseline_model"]
+    replay_guard = state["replay_guard"]
     alert_cooldown = state["alert_cooldown"]
-    metrics_start_time = state["metrics_start_time"]
-    metrics_count = state["metrics_count"]
-    current_eps = state["current_eps"]
     last_print_time = state["last_print_time"]
     direct_log_offsets = state["direct_log_offsets"]
     last_direct_poll = state["last_direct_poll"]
@@ -469,14 +580,10 @@ def main():
                 print("♻️ COMANDO RECIBIDO: Borrando memoria IA...", flush=True)
 
                 state = reset_brain_state()
-                model = state["model"]
-                stats = state["stats"]
-                history = state["history"]
-                is_trained = state["is_trained"]
+                traffic_monitor = state["traffic_monitor"]
+                baseline_model = state["baseline_model"]
+                replay_guard = state["replay_guard"]
                 alert_cooldown = state["alert_cooldown"]
-                metrics_start_time = state["metrics_start_time"]
-                metrics_count = state["metrics_count"]
-                current_eps = state["current_eps"]
                 last_print_time = state["last_print_time"]
                 direct_log_offsets = state["direct_log_offsets"]
                 last_direct_poll = state["last_direct_poll"]
@@ -488,32 +595,25 @@ def main():
                 time.sleep(1)
                 continue
 
-            # --- NUEVO: Escuchar comando para correo de prueba ---
             if r.exists("cmd_send_test_email"):
-                correo_prueba = r.get("sis_alert_email")
-                if correo_prueba:
-                    print(f"📧 [COMANDO] Enviando correo de confirmación a {correo_prueba}...", flush=True)
-                    asunto = "✅ SIEM OT: Correo Enlazado Correctamente"
-                    cuerpo = "Este es un mensaje automático de confirmación.\n\nTu dashboard SIEM ahora está configurado para enviar las alertas críticas de Ciberseguridad OT/IT a este correo.\n\nEl sistema está activo y monitoreando."
-                    
-                    # Usamos tu función para enviarlo
-                    send_email_alert(asunto, cuerpo, level="INFO", receiver_email=correo_prueba)
-                
-                # Borramos la orden para que no lo mande repetido
+                receiver = r.get("sis_alert_email")
+                if receiver:
+                    send_email_alert(
+                        "✅ SIEM OT: Correo enlazado correctamente",
+                        "El dashboard SIS quedó configurado para enviar alertas críticas.",
+                        level="INFO",
+                        receiver_email=receiver,
+                    )
                 r.delete("cmd_send_test_email")
 
             # 2. Reset Demo Total
             if r.exists("cmd_full_reset_demo"):
                 state = full_reset_demo(es, r, engine)
 
-                model = state["model"]
-                stats = state["stats"]
-                history = state["history"]
-                is_trained = state["is_trained"]
+                traffic_monitor = state["traffic_monitor"]
+                baseline_model = state["baseline_model"]
+                replay_guard = state["replay_guard"]
                 alert_cooldown = state["alert_cooldown"]
-                metrics_start_time = state["metrics_start_time"]
-                metrics_count = state["metrics_count"]
-                current_eps = state["current_eps"]
                 last_print_time = state["last_print_time"]
                 direct_log_offsets = state["direct_log_offsets"]
                 last_direct_poll = state["last_direct_poll"]
@@ -526,8 +626,9 @@ def main():
 
             # 3. Forzar re-entrenamiento
             if r.exists("cmd_force_train"):
-                print("🎓 COMANDO: Forzando re-entrenamiento...", flush=True)
-                is_trained = False
+                print("🎓 COMANDO: Reiniciando línea base de tráfico...", flush=True)
+                baseline_model.reset()
+                traffic_monitor.reset()
                 r.delete("cmd_force_train")
 
             # 4. Re-escanear manualmente redes descubiertas
@@ -551,102 +652,84 @@ def main():
                     else: break
 
             now_poll = time.time()
-            if now_poll - last_direct_poll >= DIRECT_LOG_POLL_INTERVAL:
+            if not batch_raw and now_poll - last_direct_poll >= DIRECT_LOG_POLL_INTERVAL:
                 direct_events = poll_direct_source_logs(direct_log_offsets)
                 if direct_events:
                     print(f"📥 Fallback directo: {len(direct_events)} eventos leídos desde logs de sensores", flush=True)
                     batch_raw.extend(direct_events)
                 last_direct_poll = now_poll
-            
+
             if not batch_raw:
                 item_block = r.blpop(REDIS_KEY, timeout=1)
                 if item_block: batch_raw.append(item_block[1])
                 else: continue
 
-            batch_len = len(batch_raw)
-            metrics_count += batch_len
-            elapsed_metrics = time.time() - metrics_start_time
-            
-            if elapsed_metrics >= 1.0:
-                current_eps = metrics_count / elapsed_metrics
-                lag = r.llen(REDIS_KEY)
-                metrics_start_time = time.time()
-                metrics_count = 0
+            normalized_events = []
+            for raw_json in batch_raw:
+                doc = normalizar_evento(raw_json)
+                if doc and replay_guard.accept(raw_json):
+                    normalized_events.append((raw_json, doc))
+            if not normalized_events:
+                continue
 
-            IS_FLOOD_GLOBAL = True if current_eps > FLOOD_THRESHOLD else False
+            docs = [doc for _, doc in normalized_events]
+            traffic_metrics = traffic_monitor.observe(docs)
+            ai_score = baseline_model.score(traffic_metrics)
+            current_eps = traffic_metrics['accepted_eps']
+            flood_count = len(traffic_metrics['flood_keys'])
 
-            stats['total'] += batch_len
-            if len(history) >= 20 and not is_trained:
-                 try: model.fit(list(history)); is_trained = True; print("🤖 IA Entrenada", flush=True)
-                 except: pass
-
-            ai_score = 0.5
-            if is_trained:
-                try: ai_score = float(model.decision_function([[stats['snort'], stats['total']]])[0])
-                except: pass
-
-            # Monitor de consola (cada 2s)
             if time.time() - last_print_time > 2.0:
-                icon = "🟢"
-                status_msg = "NORMAL"
-                
-                if ai_score < -0.35: 
-                    icon = "⚠️"
-                    status_msg = "ANOMALÍA SUTIL"
-                if IS_FLOOD_GLOBAL: 
-                    icon = "🔥"
-                    status_msg = "TRAFICO ALTO (Monitor)"
-                
-                if current_eps > 0 or ai_score < 0:
-                    print(f"{icon} [IA MONITOR] Score: {ai_score:.3f} | EPS: {current_eps:.0f} | Estado: {status_msg}", flush=True)
-                
+                if flood_count:
+                    icon, status_msg = "🔥", f"FLOOD CONFIRMADO ({flood_count} flujo(s))"
+                elif ai_score < -0.10:
+                    icon, status_msg = "⚠️", "DESVIACIÓN DE LÍNEA BASE"
+                else:
+                    icon, status_msg = "🟢", "NORMAL"
+                print(
+                    f"{icon} [IA MONITOR] Score: {ai_score:.3f} | "
+                    f"EPS válidos: {current_eps:.1f} | Flujo máx: {traffic_metrics['max_flow_eps']:.1f} | "
+                    f"Estado: {status_msg}",
+                    flush=True,
+                )
                 last_print_time = time.time()
 
             actions_bulk = []
-            ip_counts = {}
-            parsed_docs = []
-            for raw_json in batch_raw:
-                doc = normalizar_evento(raw_json)
-                if not doc: continue
-                parsed_docs.append((raw_json, doc))
-                src_ip = doc.get("src_ip", "0.0.0.0")
-                ip_counts[src_ip] = ip_counts.get(src_ip, 0) + 1
-
-            for raw_json, doc in parsed_docs:
-                src_ip = doc.get("src_ip", "0.0.0.0")
-                is_flood_ip = ip_counts.get(src_ip, 0) > FLOOD_THRESHOLD
-                
-                final_doc = engine.evaluar_riesgo(doc, ai_score, is_flood_ip)
+            for raw_json, doc in normalized_events:
+                event_is_flood = traffic_monitor.is_flood(doc, traffic_metrics)
+                event_ai_score = -1.0 if event_is_flood else ai_score
+                key = (str(doc.get('src_ip')), str(doc.get('dst_ip')), str(doc.get('protocol')))
+                detection_reason = traffic_metrics['reasons'].get(key)
+                final_doc = engine.evaluar_riesgo(
+                    doc,
+                    event_ai_score,
+                    event_is_flood,
+                    detection_reason=detection_reason,
+                    traffic_metrics=traffic_metrics,
+                )
                 discovered_assets.process_event(raw_json, final_doc)
-                
-                if final_doc.get('risk_label') == 'CRÍTICO' and not is_flood_ip:
-                    ip_atacante = final_doc.get('src_ip', 'unknown')
+
+                if final_doc.get('risk_label') == 'CRÍTICO':
+                    attacker_ip = final_doc.get('src_ip', 'unknown')
                     now = time.time()
-                    if (now - alert_cooldown.get(ip_atacante, 0)) > 60:
-                        asunto = f"🚨 {final_doc.get('mitre_msg')}"
-                        cuerpo = f"CRÍTICO Detectado\nIP: {ip_atacante}"
-                        
-                        # --- NUEVA LÓGICA DE CORREO DINÁMICO ---
-                        try:
-                            # Intentamos obtener el correo configurado en el dashboard web
-                            correo_dinamico = r.get("sis_alert_email")
-                        except:
-                            correo_dinamico = None
-                            
-                        # Llamamos a la función pasándole el correo extraído
-                        send_email_alert(asunto, cuerpo, level="CRITICAL", receiver_email=correo_dinamico)
-                        # ---------------------------------------
-                        
-                        alert_cooldown[ip_atacante] = now
+                    if now - alert_cooldown.get(attacker_ip, 0) > 60:
+                        subject = f"🚨 {final_doc.get('mitre_msg')}"
+                        body = (
+                            f"CRÍTICO Detectado\nEPS válidos: {current_eps:.1f}\n"
+                            f"IP: {attacker_ip}\nEvidencia: {detection_reason or 'reglas/riesgo'}"
+                        )
+                        send_email_alert(
+                            subject,
+                            body,
+                            level="CRITICAL",
+                            receiver_email=r.get("sis_alert_email"),
+                        )
+                        alert_cooldown[attacker_ip] = now
 
+                final_doc.pop("_event_epoch", None)
                 actions_bulk.append({"_index": INDEX_NAME, "_source": final_doc})
-                if final_doc['source'] == 'snort': stats['snort'] += 1
 
-            if actions_bulk: helpers.bulk(es, actions_bulk)
-            
-            if (time.time() % 5 == 0):
-                history.append([stats['snort'], stats['total']])
-            stats = {'total': 0, 'snort': 0}
+            if actions_bulk:
+                helpers.bulk(es, actions_bulk)
 
         except Exception as e:
             print(f"🔥 Error: {e}", flush=True); time.sleep(1)

@@ -6,6 +6,7 @@ export default function DiscoveredAssets() {
     const [assets, setAssets] = useState<any[]>([]);
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [loading, setLoading] = useState(false);
+    const [query, setQuery] = useState('');
 
     useEffect(() => {
         fetch('/api/assets/discovered')
@@ -59,6 +60,7 @@ export default function DiscoveredAssets() {
                 </button>
             </div>
 
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Filtrar por IP, hostname, MAC, fabricante o criticidad" className="mb-4 w-full rounded bg-[#111827] px-3 py-2 text-sm text-white" />
             <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm text-gray-300">
                     <thead className="bg-[#111827] text-gray-400">
@@ -72,7 +74,7 @@ export default function DiscoveredAssets() {
                         </tr>
                     </thead>
                     <tbody>
-                        {assets.map((asset, i) => (
+                        {assets.filter(asset => JSON.stringify(asset).toLowerCase().includes(query.toLowerCase())).map((asset, i) => (
                             <tr key={i} className="border-b border-gray-800 hover:bg-[#5F13CF]/10 transition-colors">
                                 <td className="p-3">
                                     <input

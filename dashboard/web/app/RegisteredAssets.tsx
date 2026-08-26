@@ -4,6 +4,7 @@ import { Network } from 'lucide-react';
 
 export default function RegisteredAssets() {
     const [assets, setAssets] = useState<any[]>([]);
+    const [query, setQuery] = useState('');
 
     useEffect(() => {
         fetch('/api/assets/registered')
@@ -17,6 +18,7 @@ export default function RegisteredAssets() {
                 <Network className="w-6 h-6 text-emerald-500" />
                 Activos Registrados (Oficiales)
             </h2>
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Buscar IP, nombre, tipo, MAC, fabricante o criticidad" className="mb-4 w-full rounded bg-[#111827] px-3 py-2 text-sm text-white" />
             <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm text-gray-300">
                     <thead className="bg-[#111827] text-[#7BDCB5]">
@@ -33,7 +35,7 @@ export default function RegisteredAssets() {
                         {assets.length === 0 ? (
                             <tr><td colSpan={6} className="p-4 text-center text-gray-500">No hay activos registrados aún.</td></tr>
                         ) : (
-                            assets.map((asset, i) => (
+                            assets.filter(asset => JSON.stringify(asset).toLowerCase().includes(query.toLowerCase())).map((asset, i) => (
                                 <tr key={i} className="border-b border-gray-800 hover:bg-[#7BDCB5]/10 transition-colors">
                                     <td className="p-3 font-mono">{asset.ip}</td>
                                     <td className="p-3 font-bold text-white">{asset.name}</td>
